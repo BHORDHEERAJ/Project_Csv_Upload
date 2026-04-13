@@ -1,0 +1,38 @@
+{
+  "name": "tipic-node",
+  "version": "1.0.0",
+  "description": "TiPiC Data Extraction Service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@google-cloud/vision": "^5.3.5",
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "csv-parse": "^5.5.3",
+    "dotenv": "^16.3.1",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "file-type": "^18.5.0",
+    "json2csv": "^6.0.0-alpha.2",
+    "lodash": "^4.17.21",
+    "mammoth": "^1.4.2",
+    "moment": "^2.29.4",
+    "multer": "^1.4.5-lts.1",
+    "officeparser": "^5.1.1",
+    "pdf-parse": "^1.1.1",
+    "pdf2pic": "^3.0.0",
+    "sharp": "^0.33.1",
+    "tesseract.js": "^5.0.3",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

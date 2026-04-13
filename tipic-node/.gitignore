@@ -1,0 +1,23 @@
+# Local node dependencies
+node_modules/
+
+# Local environment variables
+.env
+service-account.json
+
+# Logs
+*.log
+keys_diagnostic.txt
+model_quota_report.txt
+models_clean.txt
+models_list_raw.json
+
+# Uploads directory
+uploads/
+
+# Tesseract data (Optional: keep if you want them in repo, but they are large)
+*.traineddata
+
+# MacOS/Windows specific files
+.DS_Store
+Thumbs.db

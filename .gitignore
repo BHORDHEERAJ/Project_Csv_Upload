@@ -1,0 +1,36 @@
+# Common artifacts
+*.log
+.DS_Store
+Thumbs.db
+node_modules/
+vendor/
+
+# Environment and sensitive files
+.env
+.env.*
+service-account.json
+auth.json
+
+# Tool specific
+.phpactor.json
+.phpunit.result.cache
+.phpunit.cache
+.vscode/
+.idea/
+.fleet/
+.nova/
+.zed/
+
+# Rails/PHP artifacts
+ Homestead.json
+ Homestead.yaml
+_ide_helper.php
+
+# Public build artifacts
+/public/build
+/public/hot
+/public/storage
+
+# Storage specific
+/storage/*.key
+/storage/pail
