@@ -21,10 +21,16 @@ export const AuthProvider = ({ children }) => {
         setIsAuthenticated(true);
     };
 
-    const logout = () => {
-        localStorage.removeItem('token');
-        setToken(null);
-        setIsAuthenticated(false);
+    const logout = async () => {
+        try {
+            await axios.post('/api/v1/logout');
+        } catch (error) {
+            console.error('Logout error:', error);
+        } finally {
+            localStorage.removeItem('token');
+            setToken(null);
+            setIsAuthenticated(false);
+        }
     };
 
     return (

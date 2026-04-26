@@ -24,10 +24,17 @@ import { useAuth } from '../context/AuthContext';
 const Login = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [remember, setRemember] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const { login } = useAuth();
+    const { login, isAuthenticated } = useAuth();
     const navigate = useNavigate();
+
+    React.useEffect(() => {
+        if (isAuthenticated) {
+            navigate('/');
+        }
+    }, [isAuthenticated, navigate]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -37,7 +44,8 @@ const Login = () => {
         try {
             const response = await axios.post('/api/v1/login', {
                 email,
-                password
+                password,
+                remember
             });
 
             if (response.data.access_token) {
@@ -109,7 +117,13 @@ const Login = () => {
                                 />
 
                                 <Group justify="space-between" mt="xs">
-                                    <Checkbox label="Remember me" size="sm" color="indigo" />
+                                    <Checkbox 
+                                        label="Remember me" 
+                                        size="sm" 
+                                        color="indigo" 
+                                        checked={remember} 
+                                        onChange={(e) => setRemember(e.currentTarget.checked)} 
+                                    />
                                     <Text size="sm" c="indigo" style={{ cursor: 'pointer' }} fw={500}>
                                         Forgot password?
                                     </Text>

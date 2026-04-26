@@ -4,18 +4,19 @@ import {
     Title, Text, Table, Card, Group, Button, Badge, 
     ActionIcon, Stack, Paper, Center, Progress, 
     Box, Select, Alert, Divider, TextInput, Modal,
-    SimpleGrid, ScrollArea, Flex
+    SimpleGrid, ScrollArea, Flex, Grid
 } from '@mantine/core';
 import { 
     Download, Trash2, Edit2, Check, X, 
     FileSpreadsheet, Sparkles, Wand2, CheckCircle2,
     ArrowRightLeft, FileJson, Settings2, AlertCircle,
-    RefreshCw, Save
+    RefreshCw, Save, Search, CheckSquare, Square
 } from 'lucide-react';
 import { notifications } from '@mantine/notifications';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useMapping } from '../context/MappingContext';
 import { useSearchParams } from 'react-router-dom';
+import { Checkbox } from '@mantine/core';
 
 const Preview = () => {
     const { 
@@ -45,6 +46,118 @@ const Preview = () => {
     const [bulkPassword, setBulkPassword] = useState('');
     const [isSaving, setIsSaving] = useState(false);
 
+    // Search and Selection
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedRows, setSelectedRows] = useState(new Set());
+
+    const hasPasswordHeader = templateHeaders.some(h => 
+        h.toLowerCase().includes('pass') || h.toLowerCase().includes('password')
+    );
+
+    const filteredRows = rawRows.filter(row => 
+        Object.values(row).some(val => 
+            String(val || '').toLowerCase().includes(searchTerm.toLowerCase())
+        )
+    );
+
+    const toggleRow = (idx) => {
+        const next = new Set(selectedRows);
+        if (next.has(idx)) next.delete(idx);
+        else next.add(idx);
+        setSelectedRows(next);
+    };
+
+    const toggleAll = () => {
+        if (selectedRows.size === filteredRows.length) setSelectedRows(new Set());
+        else {
+            const next = new Set();
+            rawRows.forEach((_, i) => next.add(i));
+            setSelectedRows(next);
+        }
+    };
+
+    // Drag to fill state
+    const [dragStart, setDragStart] = useState(null); // { rowIdx, colName }
+    const [dragEnd, setDragEnd] = useState(null); // rowIdx
+    const [isDragging, setIsDragging] = useState(false);
+
+    useEffect(() => {
+        const handleGlobalMouseUp = () => {
+            if (isDragging) {
+                handleFinishDrag();
+            }
+        };
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+        return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+    }, [isDragging, dragStart, dragEnd, rawRows]);
+
+    const handleStartDrag = (rowIdx, colName) => {
+        setDragStart({ rowIdx, colName });
+        setDragEnd(rowIdx);
+        setIsDragging(true);
+    };
+
+    const handleHoverDrag = (rowIdx) => {
+        if (isDragging) {
+            setDragEnd(rowIdx);
+        }
+    };
+
+    const handleFinishDrag = () => {
+        if (!isDragging || !dragStart) {
+            setIsDragging(false);
+            setDragStart(null);
+            return;
+        }
+
+        const { rowIdx: startRow, colName } = dragStart;
+        const endRow = dragEnd;
+
+        if (startRow !== endRow) {
+            const newRows = [...rawRows];
+            const baseValue = rawRows[startRow][colName];
+            
+            const minRow = Math.min(startRow, endRow);
+            const maxRow = Math.max(startRow, endRow);
+
+            for (let i = minRow; i <= maxRow; i++) {
+                if (i === startRow) continue;
+                
+                const step = i - startRow;
+                newRows[i][colName] = incrementValue(baseValue || '', step);
+            }
+            setRawRows(newRows);
+            notifications.show({
+                title: 'Sequence Filled',
+                message: `Automatically updated ${Math.abs(startRow - endRow) + 1} cells in ${colName}.`,
+                color: 'blue'
+            });
+        }
+
+        setIsDragging(false);
+        setDragStart(null);
+        setDragEnd(null);
+    };
+
+    const incrementValue = (val, step) => {
+        if (!val) return '';
+        // If it's a pure number
+        if (!isNaN(parseFloat(val)) && isFinite(val) && !val.toString().startsWith('0')) {
+            return (parseFloat(val) + step).toString();
+        }
+        // If it ends with numbers (e.g. USER01)
+        const match = val.match(/(.*?)(\d+)$/);
+        if (match) {
+            const prefix = match[1];
+            const numStr = match[2];
+            const num = parseInt(numStr);
+            const nextNum = (num + step).toString();
+            const paddedNum = nextNum.padStart(numStr.length, '0');
+            return prefix + paddedNum;
+        }
+        return val;
+    };
+
     useEffect(() => {
         const fetchJob = async () => {
             const urlJobId = searchParams.get('jobId');
@@ -54,7 +167,6 @@ const Preview = () => {
                     const res = await axios.get(`/api/v1/jobs/${urlJobId}`);
                     if (res.data.success) {
                         loadJobData(res.data.job);
-                        // If job has extracted data but no mapped data yet, set it
                         if (res.data.job.extracted_data && (!res.data.job.mapped_data || res.data.job.mapped_data.length === 0)) {
                             setRawRows(res.data.job.extracted_data);
                         } else if (res.data.job.mapped_data) {
@@ -66,7 +178,7 @@ const Preview = () => {
                     notifications.show({ title: 'Error', message: 'Failed to load session history.', color: 'red' });
                 } finally {
                     setIsLoadingJob(false);
-                    setIsMapping(false); // Skip mapping animation for history loads
+                    setIsMapping(false);
                 }
             }
         };
@@ -153,37 +265,36 @@ const Preview = () => {
             
             if (response.data.success) {
                 const transformedPart = response.data.result || [];
-                // Merge transformed part back into original rows
-                const newRows = rawRows.map((row, idx) => ({
-                    ...row,
-                    ...(transformedPart[idx] || {})
-                }));
+                const currentSourceCol = mapping[activeCol];
+
+                // Revert to Direct Replacement: Update the original source column values
+                const newRows = rawRows.map((row, idx) => {
+                    const aiResult = transformedPart[idx] || {};
+                    const aiKeys = Object.keys(aiResult);
+                    
+                    // Match the best key from AI response
+                    const valKey = aiKeys.find(k => k.toLowerCase() === activeCol.toLowerCase()) ||
+                                   aiKeys.find(k => k.toLowerCase().includes('new')) ||
+                                   aiKeys.find(k => k !== currentSourceCol) ||
+                                   currentSourceCol;
+                    
+                    const newValue = aiResult[valKey] !== undefined ? aiResult[valKey] : (row[currentSourceCol] || '');
+                    
+                    return {
+                        ...row,
+                        [currentSourceCol]: newValue
+                    };
+                });
                 
                 setRawRows(newRows);
-
-                // Smart Detection of New Columns in the merged result
-                if (newRows.length > 0) {
-                    const allKeys = Object.keys(newRows[0]);
-                    const newKeys = allKeys.filter(k => !sourceColumns.includes(k));
-                    
-                    if (newKeys.length > 0) {
-                        setSourceColumns(allKeys);
-                        const exactMatch = newKeys.find(k => k.toLowerCase() === activeCol.toLowerCase());
-                        if (exactMatch) {
-                            setMapping(prev => ({ ...prev, [activeCol]: exactMatch }));
-                        } else if (newKeys.length === 1) {
-                            setMapping(prev => ({ ...prev, [activeCol]: newKeys[0] }));
-                        }
-                    }
-                }
-
                 setColPrompt('');
                 setActiveCol(null);
                 
                 notifications.show({
-                    title: 'Column Transformed',
-                    message: `Applied AI transformation to ${activeCol}.`,
-                    color: 'indigo'
+                    title: 'Magic Applied!',
+                    message: `TiPiC AI updated the data for "${activeCol}" in your original column.`,
+                    color: 'indigo',
+                    icon: <Check size={16} />
                 });
             }
         } catch (error) {
@@ -224,15 +335,20 @@ const Preview = () => {
             return;
         }
 
-        const newRows = rawRows.map(row => ({
-            ...row,
-            [sourceCol]: bulkPassword
-        }));
+        const newRows = rawRows.map((row, idx) => {
+            if (selectedRows.size > 0 && !selectedRows.has(idx)) return row;
+            return {
+                ...row,
+                [sourceCol]: bulkPassword
+            };
+        });
 
         setRawRows(newRows);
         notifications.show({
             title: 'Bulk Update Complete',
-            message: `Updated ${rawRows.length} passwords to the fixed value.`,
+            message: selectedRows.size > 0 
+                ? `Updated passwords for ${selectedRows.size} selected rows.`
+                : `Updated passwords for all ${rawRows.length} rows.`,
             color: 'teal',
             icon: <Check size={16} />
         });
@@ -266,19 +382,60 @@ const Preview = () => {
             return;
         }
 
-        const nameCol = sourceColumns.find(c => ['name', 'full name', 'employee name', 'customer name'].includes(c.toLowerCase()));
-        const mobCol = sourceColumns.find(c => ['mobile', 'phone', 'contact', 'mobile number'].includes(c.toLowerCase()));
-        const idCol = sourceColumns.find(c => ['emp id', 'employee id', 'id', 'code'].includes(c.toLowerCase()));
-        const dateCol = sourceColumns.find(c => ['dob', 'date', 'joining', 'date of joining'].includes(c.toLowerCase()));
+        // Identify the correct source columns using the current mapping configuration
+        const getNameCol = () => {
+            const h = templateHeaders.find(t => t.toLowerCase().includes('name'));
+            return mapping[h];
+        };
+        const getMobCol = () => {
+            const h = templateHeaders.find(t => t.toLowerCase().includes('mobile'));
+            return mapping[h];
+        };
+        const getDateCol = () => {
+            const h = templateHeaders.find(t => t.toLowerCase().includes('date') || t.toLowerCase().includes('dob') || t.toLowerCase().includes('doj'));
+            return mapping[h];
+        };
 
-        const updatedRows = rawRows.map(row => {
-            const namePart = (row[nameCol] || 'USR').toString().substring(0, 3).toUpperCase();
-            const mobPart = (row[mobCol] || '000').toString().slice(-3);
-            const idPart = (row[idCol] || '').toString().slice(-3);
-            const datePart = (row[dateCol] || '').toString().replace(/[^0-9]/g, '').slice(0, 4);
+        const nameCol = getNameCol();
+        const mobCol = getMobCol();
+        const dateCol = getDateCol();
+
+        const updatedRows = rawRows.map((row, idx) => {
+            if (selectedRows.size > 0 && !selectedRows.has(idx)) return row;
+
+            // Name: First 3 letters from the designated Name column
+            let namePart = (nameCol && row[nameCol] ? row[nameCol] : 'USR').toString().trim().substring(0, 3);
+            if (namePart.length < 3) namePart = namePart.padEnd(3, 'X');
             
-            const randomSuffix = Math.floor(Math.random() * 90 + 10);
-            const generatedPassword = `${namePart}${mobPart}@${idPart || datePart || randomSuffix}`;
+            // Mobile: Last 3 numbers from the designated Mobile column
+            const mobRaw = (mobCol && row[mobCol] ? row[mobCol] : '000').toString().replace(/[^0-9]/g, '');
+            let mobPart = mobRaw.slice(-3);
+            if (mobPart.length < 3) mobPart = mobPart.padStart(3, '0');
+            
+            // DOB/DOJ: Just the date (day part)
+            let dobPart = '01';
+            const dobRaw = (row[dateCol] || '').toString().trim();
+            if (dobRaw) {
+                // Handle various formats: 2024-01-05 or 05-01-2024 or 05/01/2024
+                const parts = dobRaw.split(/[-/]/);
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                        // YYYY-MM-DD -> Take DD (last part)
+                        dobPart = parts[2].substring(0, 2).padStart(2, '0');
+                    } else {
+                        // DD-MM-YYYY -> Take DD (first part)
+                        dobPart = parts[0].padStart(2, '0');
+                    }
+                } else {
+                    // Fallback to first number found
+                    const dateMatch = dobRaw.match(/(\d{1,2})/);
+                    if (dateMatch) dobPart = dateMatch[1].padStart(2, '0');
+                }
+            } else {
+                dobPart = '00'; 
+            }
+            
+            const generatedPassword = `${namePart}${mobPart}@${dobPart}`;
 
             return {
                 ...row,
@@ -289,7 +446,9 @@ const Preview = () => {
         setRawRows(updatedRows);
         notifications.show({
             title: 'Auto-Generation Complete',
-            message: `Unique passwords generated for ${rawRows.length} employees.`,
+            message: selectedRows.size > 0
+                ? `Unique passwords generated for ${selectedRows.size} selected items.`
+                : `Unique passwords generated for ${rawRows.length} employees.`,
             color: 'indigo',
             icon: <Check size={16} />
         });
@@ -382,18 +541,39 @@ const Preview = () => {
         }
     };
 
+    const [isDownloading, setIsDownloading] = useState(false);
+
     const downloadFile = async (format) => {
+        if (rawRows.length === 0) {
+            notifications.show({
+                title: 'No Data',
+                message: 'There is no data to export.',
+                color: 'yellow'
+            });
+            return;
+        }
+
         try {
-            setMappingStatus(`Generating ${format.toUpperCase()}...`);
+            setIsDownloading(true);
+            setMappingProgress(20);
+            setMappingStatus(`Preparing ${format.toUpperCase()} file...`);
+            setIsMapping(true); // Show the magic processing screen
             
-            // Transform rawRows into the final mapped structure based on user configuration
-            const mappedRows = rawRows.map(row => {
+            // USE FILTERED ROWS instead of rawRows to support downloading "filtered data"
+            const dataToExport = filteredRows.length > 0 ? filteredRows : rawRows;
+
+            // Transform data into the final mapped structure
+            const mappedRows = dataToExport.map(row => {
                 const newRow = {};
                 templateHeaders.forEach(header => {
-                    newRow[header] = row[mapping[header]] || '';
+                    const sourceKey = mapping[header];
+                    newRow[header] = sourceKey ? row[sourceKey] : '';
                 });
                 return newRow;
             });
+
+            setMappingProgress(50);
+            setMappingStatus(`Generating ${format.toUpperCase()} on server...`);
 
             const res = await axios.post('/api/v1/export', {
                 rows: mappedRows,
@@ -406,41 +586,88 @@ const Preview = () => {
                 responseType: 'blob'
             });
 
+            setMappingProgress(90);
+            setMappingStatus('Finalizing download...');
+
+            // Create download link for the binary blob
+            const blob = new Blob([res.data], { 
+                type: format === 'xlsx' 
+                    ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+                    : 'text/csv; charset=utf-8' 
+            });
+            
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `TiPiC_Export_${new Date().getTime()}.${format}`);
+            document.body.appendChild(link);
+            link.click();
+            
+            // Cleanup
+            setTimeout(() => {
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(link);
+            }, 100);
+
             notifications.show({
                 title: 'Export Successful',
                 message: `Your data has been exported as ${format.toUpperCase()}`,
                 color: 'teal',
                 icon: <Check size={16} />
             });
-
-            // Create download link for the binary blob
-            const url = window.URL.createObjectURL(new Blob([res.data]));
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', `TiPiC_Mapped_Export.${format}`);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
             
         } catch (error) {
             console.error('Export failed:', error);
+            const errorMsg = error.response?.data?.error || 'Failed to generate export file. Please check your connection.';
+            
             notifications.show({
                 title: 'Export Failed',
-                message: 'Failed to generate export file. Please ensure the backend service is running.',
+                message: errorMsg,
                 color: 'red',
                 icon: <X size={16} />
             });
+        } finally {
+            setIsDownloading(false);
+            setIsMapping(false);
+            setMappingProgress(0);
         }
     };
 
     if (isMapping) {
         return (
             <Center h="70vh">
-                <Stack align="center" gap="xl" w="100%" maxWidth={500}>
-                    <Wand2 size={48} color="var(--mantine-color-indigo-6)" />
-                    <Title order={2}>Engineers' Magic Processing...</Title>
-                    <Text c="dimmed">Aligning Customer Data to TiPiC Sample Headers</Text>
-                    <Progress value={mappingProgress} w="100%" size="xl" radius="xl" animated color="indigo" />
+                <Stack align="center" gap="xl" w="100%" style={{ maxWidth: 500 }}>
+                    <motion.div
+                        animate={{ 
+                            rotate: [0, 10, -10, 10, 0],
+                            scale: [1, 1.1, 1]
+                        }}
+                        transition={{ repeat: Infinity, duration: 2 }}
+                    >
+                        <Wand2 size={64} color="var(--mantine-color-indigo-6)" />
+                    </motion.div>
+                    
+                    <Stack gap={5} align="center">
+                        <Title order={2}>AI Engineers at Work...</Title>
+                        <Text c="dimmed" size="sm">Aligning Customer Data to TiPiC Standard Format</Text>
+                    </Stack>
+
+                    <Box w="100%">
+                        <Group justify="space-between" mb="xs">
+                            <Text size="xs" fw={700} c="indigo">PROCESSING ENGINE</Text>
+                            <Text size="xs" fw={700} c="indigo">{mappingProgress}% Complete</Text>
+                        </Group>
+                        <Progress value={mappingProgress} w="100%" h={10} radius="xl" animated color="indigo" />
+                    </Box>
+
+                    <Paper withBorder p="md" radius="md" bg="indigo.0" w="100%">
+                        <Group justify="center" gap="xs">
+                            <RefreshCw size={14} className="spinning" />
+                            <Text size="sm" fw={600} c="indigo">
+                                Optimized Response in {Math.max(1, 10 - Math.floor(mappingProgress / 10))}s...
+                            </Text>
+                        </Group>
+                    </Paper>
                 </Stack>
             </Center>
         );
@@ -455,10 +682,21 @@ const Preview = () => {
                         <Text c="dimmed">Fine-tune the field mapping before downloading the final file.</Text>
                     </Stack>
                     <Group>
-                        <Button variant="outline" color="indigo" onClick={() => downloadFile('xlsx')} leftSection={<FileSpreadsheet size={18} />}>
+                        <Button 
+                            variant="outline" 
+                            color="indigo" 
+                            onClick={() => downloadFile('xlsx')} 
+                            loading={isDownloading} 
+                            leftSection={<FileSpreadsheet size={18} />}
+                        >
                             Download as Excel (.xlsx)
                         </Button>
-                        <Button color="indigo" onClick={() => downloadFile('csv')} leftSection={<Download size={18} />}>
+                        <Button 
+                            color="indigo" 
+                            onClick={() => downloadFile('csv')} 
+                            loading={isDownloading} 
+                            leftSection={<Download size={18} />}
+                        >
                             Download as CSV (.utf8)
                         </Button>
                     </Group>
@@ -468,109 +706,124 @@ const Preview = () => {
                     The data below has been automatically extracted and mapped based on your uploaded files.
                 </Alert>
 
-                <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="xl" mb="xl">
-                    <Card withBorder radius="md" padding="lg">
-                        <Title order={4} mb="md">Mapping Configuration</Title>
-                        <Text size="xs" c="dimmed" mb="md">Map your source document columns to the TiPiC standard format.</Text>
-                        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-                            {templateHeaders.map(header => (
-                                <Paper key={header} withBorder p="xs" radius="sm" bg="var(--mantine-color-gray-0)">
-                                    <Stack gap={4}>
-                                        <Text size="xs" fw={700} c="dimmed" style={{ textTransform: 'uppercase' }}>{header} *</Text>
-                                        <Select
-                                            placeholder="Select column"
-                                            data={sourceColumns}
-                                            value={mapping[header]}
-                                            onChange={(val) => updateMapping(header, val)}
-                                            size="sm"
-                                            clearable
-                                            searchable
-                                        />
-                                    </Stack>
-                                </Paper>
-                            ))}
-                        </SimpleGrid>
-                        <Button
-                            mt="md"
-                            variant="light"
-                            color="cyan"
-                            fullWidth
-                            leftSection={<Sparkles size={16} />}
-                            onClick={async () => {
-                                setMappingStatus('AI Suggesting Mappings...');
-                                setIsMapping(true);
-                                try {
-                                    const response = await axios.post('/api/v1/ai-fix', {
-                                        type: 'mapping',
-                                        data: { sourceColumns, templateHeaders }
-                                    });
-                                    if (response.data.success) {
-                                        setMapping(response.data.result);
-                                    }
-                                } finally {
-                                    setIsMapping(false);
-                                }
-                            }}
-                        >
-                            AI Suggest Mapping
-                        </Button>
-                    </Card>
-
-                    <Card withBorder radius="md" padding="lg" bg="gray.0">
-                        <Title order={4} mb="md">Detected Source Fields</Title>
-                        <Text size="xs" c="dimmed" mb="md">These fields were successfully extracted from your customer document:</Text>
-                        <Group gap="xs">
-                            {sourceColumns.map(col => (
-                                <Badge key={col} variant="outline" color="gray" radius="sm" size="sm">
-                                    {col}
-                                </Badge>
-                            ))}
-                            {sourceColumns.length === 0 && (
-                                <Alert color="red" icon={<AlertCircle size={16} />} title="No Headers Found" variant="light" w="100%">
-                                    The engine could not find any headers in the customer document. Please check the file format.
-                                </Alert>
-                            )}
-                        </Group>
-                    </Card>
-
-                    <Card withBorder radius="md" padding="lg" style={{ borderLeft: '4px solid var(--mantine-color-teal-6)' }}>
-                        <Title order={4} mb="xs">Bulk Password Update</Title>
-                        <Text size="xs" c="dimmed" mb="md">Set the same password for all records instantly.</Text>
-                        <Stack gap="sm">
-                            <Group grow align="flex-end">
-                                <TextInput 
-                                    label="Fixed Password"
-                                    placeholder="Enter password..."
-                                    value={bulkPassword}
-                                    onChange={(e) => setBulkPassword(e.currentTarget.value)}
-                                    size="sm"
-                                />
-                                <Button 
-                                    variant="filled" 
-                                    color="teal" 
-                                    onClick={handleBulkPasswordUpdate}
-                                    disabled={!bulkPassword.trim()}
-                                    leftSection={<Check size={16} />}
-                                    size="sm"
-                                >
-                                    Apply
-                                </Button>
-                            </Group>
-
-                            <Divider label="OR" labelPosition="center" my="xs" />
-
-                            <Button 
-                                variant="outline" 
-                                color="indigo" 
+                <Grid gutter="xl" mb="xl">
+                    <Grid.Col span={{ base: 12, md: 12, lg: hasPasswordHeader ? 4 : 8 }}>
+                        <Card withBorder radius="md" padding="lg" shadow="sm" h="100%">
+                            <Title order={4} mb="md">Mapping Configuration</Title>
+                            <Text size="xs" c="dimmed" mb="xl">Map your source document columns to the TiPiC standard format.</Text>
+                            
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                                {templateHeaders.map(header => (
+                                    <Paper key={header} withBorder p="md" radius="md" bg="white" style={{ borderColor: 'var(--mantine-color-gray-2)' }}>
+                                        <Stack gap="xs">
+                                            <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                                {header} *
+                                            </Text>
+                                            <Select
+                                                placeholder="Select column"
+                                                data={sourceColumns}
+                                                value={mapping[header]}
+                                                onChange={(val) => updateMapping(header, val)}
+                                                size="md"
+                                                variant="filled"
+                                                radius="md"
+                                                clearable
+                                                searchable
+                                                comboboxProps={{ shadow: 'md', radius: 'md' }}
+                                            />
+                                        </Stack>
+                                    </Paper>
+                                ))}
+                            </SimpleGrid>
+                            <Button
+                                mt="md"
+                                variant="light"
+                                color="cyan"
                                 fullWidth
-                                leftSection={<RefreshCw size={16} />}
-                                onClick={handleAutoGeneratePasswords}
+                                leftSection={<Sparkles size={16} />}
+                                onClick={async () => {
+                                    setMappingStatus('AI Suggesting Mappings...');
+                                    setIsMapping(true);
+                                    try {
+                                        const response = await axios.post('/api/v1/ai-fix', {
+                                            type: 'mapping',
+                                            data: { sourceColumns, templateHeaders }
+                                        });
+                                        if (response.data.success) {
+                                            setMapping(response.data.result);
+                                        }
+                                    } finally {
+                                        setIsMapping(false);
+                                    }
+                                }}
                             >
-                                Auto-Generate (Unique Passwords)
+                                AI Suggest Mapping
                             </Button>
-                        </Stack>
-                    </Card>
-                </SimpleGrid>
+                        </Card>
+                    </Grid.Col>
+
+                    <Grid.Col span={{ base: 12, md: 12, lg: 4 }}>
+                        <Card withBorder radius="md" padding="lg" bg="gray.0" shadow="xs" h="100%">
+                            <Title order={4} mb="md">Detected Source Fields</Title>
+                            <Text size="xs" c="dimmed" mb="md">These fields were successfully extracted from your customer document:</Text>
+                            <Group gap="xs">
+                                {sourceColumns.map(col => (
+                                    <Badge key={col} variant="outline" color="gray" radius="sm" size="sm">
+                                        {col}
+                                    </Badge>
+                                ))}
+                                {sourceColumns.length === 0 && (
+                                    <Alert color="red" icon={<AlertCircle size={16} />} title="No Headers Found" variant="light" w="100%">
+                                        The engine could not find any headers in the customer document. Please check the file format.
+                                    </Alert>
+                                )}
+                            </Group>
+                        </Card>
+                    </Grid.Col>
+
+                    {hasPasswordHeader && (
+                        <Grid.Col span={{ base: 12, md: 12, lg: 4 }}>
+                            <Card withBorder radius="md" padding="lg" style={{ borderLeft: '4px solid var(--mantine-color-teal-6)' }} shadow="sm">
+                                <Title order={4} mb="xs">Bulk Password Update</Title>
+                                <Text size="xs" c="dimmed" mb="md">Set the same password for all records instantly.</Text>
+                                <Stack gap="sm">
+                                    <Group grow align="flex-end">
+                                        <TextInput 
+                                            label="Fixed Password"
+                                            placeholder="Enter password..."
+                                            value={bulkPassword}
+                                            onChange={(e) => setBulkPassword(e.currentTarget.value)}
+                                            size="sm"
+                                        />
+                                        <Button 
+                                            variant="filled" 
+                                            color="teal" 
+                                            onClick={handleBulkPasswordUpdate}
+                                            disabled={!bulkPassword.trim()}
+                                            leftSection={<Check size={16} />}
+                                            size="sm"
+                                        >
+                                            Apply
+                                        </Button>
+                                    </Group>
+
+                                    <Divider label="OR" labelPosition="center" my="xs" />
+
+                                    <Button 
+                                        variant="outline" 
+                                        color="indigo" 
+                                        onClick={handleAutoGeneratePasswords}
+                                        leftSection={<RefreshCw size={16} />}
+                                        size="sm"
+                                        fullWidth
+                                    >
+                                        Auto-Generate (Unique Password)
+                                    </Button>
+                                </Stack>
+                            </Card>
+                        </Grid.Col>
+                    )}
+                </Grid>
 
                 <Card withBorder radius="md" mb="xl" padding="lg" shadow="sm" style={{ borderLeft: '4px solid var(--mantine-color-indigo-6)' }}>
                     <Group justify="space-between" mb="xs">
@@ -620,6 +873,36 @@ const Preview = () => {
                     </Flex>
                 </Card>
 
+                <Group justify="space-between" mb="md">
+                    <TextInput 
+                        placeholder="Search data..." 
+                        leftSection={<Search size={16} />} 
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.currentTarget.value)}
+                        w={300}
+                    />
+                    <Group gap="xs">
+                        {selectedRows.size > 0 && (
+                            <Badge variant="light" color="indigo" size="lg">
+                                {selectedRows.size} rows selected
+                            </Badge>
+                        )}
+                        <Button 
+                            variant="subtle" 
+                            color="red" 
+                            onClick={() => {
+                                const newRows = rawRows.filter((_, i) => !selectedRows.has(i));
+                                setRawRows(newRows);
+                                setSelectedRows(new Set());
+                            }}
+                            disabled={selectedRows.size === 0}
+                            leftSection={<Trash2 size={16} />}
+                        >
+                            Delete Selected
+                        </Button>
+                    </Group>
+                </Group>
+
                 <Divider label="Data Preview (Mapped Result)" labelPosition="center" mb="xl" />
 
                 <Card shadow="sm" radius="md" withBorder padding={0}>
@@ -627,6 +910,13 @@ const Preview = () => {
                         <Table verticalSpacing="md" highlightOnHover striped withColumnBorders>
                             <Table.Thead bg="indigo.0">
                                 <Table.Tr>
+                                    <Table.Th w={40}>
+                                        <Checkbox 
+                                            checked={selectedRows.size === rawRows.length && rawRows.length > 0} 
+                                            indeterminate={selectedRows.size > 0 && selectedRows.size < rawRows.length}
+                                            onChange={toggleAll}
+                                        />
+                                    </Table.Th>
                                     {templateHeaders.map(header => (
                                         <Table.Th key={header} c="indigo.9" fw={900}>
                                             <Group gap="xs" justify="space-between" wrap="nowrap">
@@ -647,60 +937,87 @@ const Preview = () => {
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
-                                {rawRows.map((row, idx) => (
-                                    <Table.Tr key={idx}>
-                                        {templateHeaders.map(header => {
-                                            const sourceCol = mapping[header];
-                                            const value = row[sourceCol] || '';
-                                            return (
-                                                <Table.Td key={header}>
-                                                    <TextInput
-                                                        variant="unstyled"
-                                                        size="xs"
-                                                        value={value}
-                                                        onChange={(e) => {
-                                                            const newRows = [...rawRows];
-                                                            newRows[idx][sourceCol] = e.currentTarget.value;
-                                                            setRawRows(newRows);
+                                {filteredRows.map((row, displayIdx) => {
+                                    const actualIdx = rawRows.indexOf(row);
+                                    return (
+                                        <Table.Tr key={actualIdx} bg={selectedRows.has(actualIdx) ? 'indigo.0' : undefined}>
+                                            <Table.Td>
+                                                <Checkbox 
+                                                    checked={selectedRows.has(actualIdx)} 
+                                                    onChange={() => toggleRow(actualIdx)} 
+                                                />
+                                            </Table.Td>
+                                            {templateHeaders.map(header => {
+                                                const sourceCol = mapping[header];
+                                                const value = row[sourceCol] || '';
+                                                const isInRange = isDragging && dragStart?.colName === sourceCol && (
+                                                    (actualIdx >= dragStart.rowIdx && actualIdx <= dragEnd) ||
+                                                    (actualIdx <= dragStart.rowIdx && actualIdx >= dragEnd)
+                                                );
+
+                                                return (
+                                                    <Table.Td 
+                                                        key={header} 
+                                                        style={{ 
+                                                            padding: 0,
+                                                            backgroundColor: isInRange ? 'var(--mantine-color-indigo-1)' : 'white'
                                                         }}
-                                                        styles={{
-                                                            input: { 
-                                                                minHeight: 'unset', 
-                                                                height: 'auto', 
-                                                                padding: '4px 8px',
-                                                                '&:focus': { backgroundColor: 'var(--mantine-color-indigo-0)' }
-                                                            }
-                                                        }}
-                                                    />
-                                                </Table.Td>
-                                            );
-                                        })}
-                                        <Table.Td>
-                                            <Group gap="xs" wrap="nowrap">
-                                                <ActionIcon 
-                                                    variant="light" 
-                                                    color="cyan" 
-                                                    size="sm" 
-                                                    onClick={() => fixRowWithAI(idx)}
-                                                    title="Fix with AI"
-                                                >
-                                                    <Sparkles size={14} />
-                                                </ActionIcon>
-                                                <ActionIcon variant="light" color="red" size="sm" onClick={() => {
-                                                    const newRows = rawRows.filter((_, i) => i !== idx);
-                                                    setRawRows(newRows);
-                                                }}>
-                                                    <Trash2 size={14} />
-                                                </ActionIcon>
-                                            </Group>
-                                        </Table.Td>
-                                    </Table.Tr>
-                                ))}
-                                {rawRows.length === 0 && (
+                                                        onMouseEnter={() => handleHoverDrag(actualIdx)}
+                                                    >
+                                                        <TextInput
+                                                            variant="unstyled"
+                                                            size="xs"
+                                                            value={value}
+                                                            onMouseDown={() => handleStartDrag(actualIdx, sourceCol)}
+                                                            onChange={(e) => {
+                                                                const newRows = [...rawRows];
+                                                                newRows[actualIdx][sourceCol] = e.currentTarget.value;
+                                                                setRawRows(newRows);
+                                                            }}
+                                                            styles={{
+                                                                input: { 
+                                                                    minHeight: 'unset', 
+                                                                    height: 'auto', 
+                                                                    padding: '8px',
+                                                                    cursor: 'cell',
+                                                                    backgroundColor: 'transparent',
+                                                                    '&:focus': { backgroundColor: 'var(--mantine-color-indigo-0)' }
+                                                                }
+                                                            }}
+                                                        />
+                                                    </Table.Td>
+                                                );
+                                            })}
+                                            <Table.Td>
+                                                <Group gap="xs" wrap="nowrap">
+                                                    <ActionIcon 
+                                                        variant="light" 
+                                                        color="cyan" 
+                                                        size="sm" 
+                                                        onClick={() => fixRowWithAI(actualIdx)}
+                                                        title="Fix with AI"
+                                                    >
+                                                        <Sparkles size={14} />
+                                                    </ActionIcon>
+                                                    <ActionIcon variant="light" color="red" size="sm" onClick={() => {
+                                                        const newRows = rawRows.filter((_, i) => i !== actualIdx);
+                                                        setRawRows(newRows);
+                                                        const nextSelected = new Set(selectedRows);
+                                                        nextSelected.delete(actualIdx);
+                                                        setSelectedRows(nextSelected);
+                                                    }}>
+                                                        <Trash2 size={14} />
+                                                    </ActionIcon>
+                                                </Group>
+                                            </Table.Td>
+                                        </Table.Tr>
+                                    );
+                                })}
+                                {filteredRows.length === 0 && (
                                     <Table.Tr>
-                                        <Table.Td colSpan={templateHeaders.length + 1}>
+                                        <Table.Td colSpan={templateHeaders.length + 2}>
                                             <Center py="xl">
-                                                <Text c="dimmed">No data available to preview.</Text>
+                                                <Text c="dimmed">No data matching your search.</Text>
                                             </Center>
                                         </Table.Td>
                                     </Table.Tr>

@@ -18,7 +18,7 @@ const Dashboard = () => {
     useEffect(() => {
         const fetchDashboardData = async () => {
             try {
-                const response = await axios.get('http://localhost:8000/api/v1/dashboard');
+                const response = await axios.get('/api/v1/dashboard');
                 setStatsData(response.data.stats);
                 setRecentJobs(response.data.recent_jobs);
             } catch (error) {
@@ -39,8 +39,8 @@ const Dashboard = () => {
 
     const stats = [
         { title: 'Total Uploads', value: statsData.total_uploads, icon: FileUp, color: 'indigo' },
-        { title: 'Processing', value: statsData.processing, icon: Clock, color: 'blue' },
         { title: 'Successful', value: statsData.successful, icon: CheckCircle, color: 'teal' },
+        { title: 'Success Rate', value: statsData.success_rate || '0%', icon: Progress, color: 'cyan' },
         { title: 'Failed', value: statsData.failed, icon: AlertCircle, color: 'red' },
     ];
 

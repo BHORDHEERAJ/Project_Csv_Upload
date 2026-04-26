@@ -35,4 +35,37 @@ return [
         ],
     ],
 
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'key_2' => env('GEMINI_API_KEY_2'),
+        'key_3' => env('GEMINI_API_KEY_3'),
+        'key_4' => env('GEMINI_API_KEY_4'),
+        'key_5' => env('GEMINI_API_KEY_5'),
+        'key_6' => env('GEMINI_API_KEY_6'),
+        'key_7' => env('GEMINI_API_KEY_7'),
+        'key_8' => env('GEMINI_API_KEY_8'),
+        'key_9' => env('GEMINI_API_KEY_9'),
+        'key_10' => env('GEMINI_API_KEY_10'),
+        'model' => env('GEMINI_MODEL', 'gemini-1.5-flash'),
+        'fallback_model' => env('GEMINI_FALLBACK_MODEL', 'gemini-2.0-flash'),
+    ],
+
+    'grok' => [
+        'key' => env('GROK_API_KEY'),
+        'model' => env('GROK_MODEL', 'grok-2-1212'),
+    ],
+
+    'groq' => [
+        'key' => env('GROQ_API_KEY'),
+        'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+    ],
+
+    'google' => [
+        'vision_key' => env('GOOGLE_VISION_API_KEY'),
+    ],
+
+    'openai' => [
+        'key' => env('OPENAI_API_KEY'),
+        'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+    ],
 ];

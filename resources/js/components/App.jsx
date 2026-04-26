@@ -29,7 +29,7 @@ const App = () => {
                                     <Route path="/upload" element={<Upload />} />
                                     <Route path="/preview" element={<Preview />} />
                                     <Route path="/settings" element={<MappingConfigUI />} />
-                                    <Route path="/history" element={<History />} />
+                                    {/* <Route path="/history" element={<History />} /> */}
                                 </Routes>
                             </MainLayout>
                         ) : (

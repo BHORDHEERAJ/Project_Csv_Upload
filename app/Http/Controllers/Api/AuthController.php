@@ -43,22 +43,35 @@ class AuthController extends Controller
 
     public function login(Request $request)
     {
-        if (!Auth::attempt($request->only('email', 'password'))) {
+        $credentials = $request->only('email', 'password');
+        $remember = $request->input('remember', false);
+
+        if (!Auth::attempt($credentials, $remember)) {
             return response()->json(['message' => 'Invalid login credentials'], 401);
         }
 
-        $user = User::where('email', $request->email)->firstOrFail();
+        $user = Auth::user();
         $token = $user->createToken('auth_token')->plainTextToken;
+
+        // If remember is true, Laravel handles the remember_token in the DB.
+        // We also want to ensure the token is stable.
 
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
+            'user' => [
+                'name' => $user->name,
+                'email' => $user->email,
+            ]
         ]);
     }
 
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
+        if ($request->user()) {
+            $request->user()->currentAccessToken()->delete();
+            Auth::guard('web')->logout(); // Clear session if any
+        }
         return response()->json(['message' => 'Successfully logged out']);
     }
 }

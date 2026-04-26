@@ -34,7 +34,10 @@ class DashboardController extends Controller
             ->count();
 
         // Recent Jobs (last 10)
-        $recentJobs = ProcessingJob::with('customerFile')
+        $recentJobs = ProcessingJob::with(['customerFile' => function($query) {
+                $query->select('id', 'original_name');
+            }])
+            ->select('id', 'session_id', 'customer_file_id', 'created_at', 'status')
             ->where('user_id', $user->id)
             ->orderBy('created_at', 'desc')
             ->limit(10)
@@ -59,12 +62,17 @@ class DashboardController extends Controller
                 ];
             });
 
+        $successRate = ($successful + $processing + $failed) > 0 
+            ? round(($successful / ($successful + $processing + $failed + 0.001)) * 100, 1) 
+            : 0;
+
         return response()->json([
             'stats' => [
                 'total_uploads' => $totalUploads,
                 'processing' => $processing,
                 'successful' => $successful,
                 'failed' => $failed,
+                'success_rate' => $successRate . '%',
             ],
             'recent_jobs' => $recentJobs
         ]);
