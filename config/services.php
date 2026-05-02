@@ -56,7 +56,7 @@ return [
     ],
 
     'groq' => [
-        'key' => env('GROQ_API_KEY'),
+        'key' => env('GROQ_API_KEY') ?: env('GROK_API_KEY'),
         'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
     ],
 
@@ -67,5 +67,9 @@ return [
     'openai' => [
         'key' => env('OPENAI_API_KEY'),
         'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+    ],
+
+    'node' => [
+        'url' => env('NODE_SERVER_URL'),
     ],
 ];

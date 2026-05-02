@@ -12,13 +12,16 @@ export const MappingProvider = ({ children }) => {
     const [mapping, setMapping] = useState({});
     const [jobId, setJobId] = useState(null);
     
+    const [customerFileUrl, setCustomerFileUrl] = useState(null);
+    
     // Helper to load job data from history
-    const loadJobData = (job) => {
+    const loadJobData = (job, fileUrl = null) => {
         setJobId(job.id);
         setExtractedData(job.mapped_data || job.extracted_data || []);
         setTemplateHeaders(job.template_headers || []);
         setSourceColumns(job.source_columns || []);
         setMapping(job.mapping || {});
+        if (fileUrl) setCustomerFileUrl(fileUrl);
     };
 
     return (
@@ -28,6 +31,7 @@ export const MappingProvider = ({ children }) => {
             sourceColumns, setSourceColumns,
             mapping, setMapping,
             jobId, setJobId,
+            customerFileUrl, setCustomerFileUrl,
             loadJobData
         }}>
             {children}

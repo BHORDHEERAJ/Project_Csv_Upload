@@ -10,13 +10,16 @@ import {
     Download, Trash2, Edit2, Check, X, 
     FileSpreadsheet, Sparkles, Wand2, CheckCircle2,
     ArrowRightLeft, FileJson, Settings2, AlertCircle,
-    RefreshCw, Save, Search, CheckSquare, Square
+    RefreshCw, Save, Search, CheckSquare, Square,
+    Eye, EyeOff, LayoutPanelLeft
 } from 'lucide-react';
 import { notifications } from '@mantine/notifications';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Checkbox, FileButton } from '@mantine/core';
+import * as XLSX from 'xlsx';
+import { PREDEFINED_TEMPLATES, TEMPLATE_HEADERS_MAP } from '../config/templates';
 import { useMapping } from '../context/MappingContext';
 import { useSearchParams } from 'react-router-dom';
-import { Checkbox } from '@mantine/core';
 
 const Preview = () => {
     const { 
@@ -25,6 +28,7 @@ const Preview = () => {
         extractedData, setExtractedData,
         mapping, setMapping,
         jobId, setJobId,
+        customerFileUrl, setCustomerFileUrl,
         loadJobData
     } = useMapping();
 
@@ -34,6 +38,9 @@ const Preview = () => {
     const [isMapping, setIsMapping] = useState(true);
     const [mappingProgress, setMappingProgress] = useState(0);
     const [mappingStatus, setMappingStatus] = useState('Finalizing Field Alignment...');
+    
+    // Split View State
+    const [showSource, setShowSource] = useState(false);
     
     const [rawRows, setRawRows] = useState([]);
     const [userPrompt, setUserPrompt] = useState('');
@@ -45,6 +52,9 @@ const Preview = () => {
     const [colError, setColError] = useState(null);
     const [bulkPassword, setBulkPassword] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    
+    // Template Selection State
+    const [selectedTemplateId, setSelectedTemplateId] = useState('');
 
     // Search and Selection
     const [searchTerm, setSearchTerm] = useState('');
@@ -166,7 +176,7 @@ const Preview = () => {
                 try {
                     const res = await axios.get(`/api/v1/jobs/${urlJobId}`);
                     if (res.data.success) {
-                        loadJobData(res.data.job);
+                        loadJobData(res.data.job, res.data.customerFileUrl);
                         if (res.data.job.extracted_data && (!res.data.job.mapped_data || res.data.job.mapped_data.length === 0)) {
                             setRawRows(res.data.job.extracted_data);
                         } else if (res.data.job.mapped_data) {
@@ -524,6 +534,42 @@ const Preview = () => {
         }
     };
 
+    const handleTemplateChange = (val) => {
+        setSelectedTemplateId(val);
+        if (val && TEMPLATE_HEADERS_MAP[val]) {
+            setTemplateHeaders(TEMPLATE_HEADERS_MAP[val].headers);
+            notifications.show({
+                title: 'Template Selected',
+                message: `Applied headers from ${PREDEFINED_TEMPLATES.find(t => t.value === val)?.label}`,
+                color: 'blue'
+            });
+        }
+    };
+
+    const handleCustomTemplateUpload = (file) => {
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+            const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+            
+            if (json.length > 0) {
+                const headers = json[0].filter(h => h).map(h => String(h).trim());
+                setTemplateHeaders(headers);
+                notifications.show({
+                    title: 'Custom Template Loaded',
+                    message: `Detected ${headers.length} headers from your file.`,
+                    color: 'teal'
+                });
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+
     const fixRowWithAI = async (idx) => {
         try {
             const response = await axios.post('/api/v1/ai-fix', {
@@ -699,6 +745,15 @@ const Preview = () => {
                         >
                             Download as CSV (.utf8)
                         </Button>
+                        <Button 
+                            variant={showSource ? "filled" : "light"} 
+                            color="indigo" 
+                            onClick={() => setShowSource(!showSource)}
+                            disabled={!customerFileUrl}
+                            leftSection={showSource ? <EyeOff size={18} /> : <Eye size={18} />}
+                        >
+                            {showSource ? "Hide Source" : "Compare View"}
+                        </Button>
                     </Group>
                 </Group>
 
@@ -707,149 +762,160 @@ const Preview = () => {
                 </Alert>
 
                 <Grid gutter="xl" mb="xl">
-                    <Grid.Col span={{ base: 12, md: 12, lg: hasPasswordHeader ? 4 : 8 }}>
-                        <Card withBorder radius="md" padding="lg" shadow="sm" h="100%">
-                            <Title order={4} mb="md">Mapping Configuration</Title>
-                            <Text size="xs" c="dimmed" mb="xl">Map your source document columns to the TiPiC standard format.</Text>
-                            
-                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-                                {templateHeaders.map(header => (
-                                    <Paper key={header} withBorder p="md" radius="md" bg="white" style={{ borderColor: 'var(--mantine-color-gray-2)' }}>
-                                        <Stack gap="xs">
-                                            <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                {header} *
-                                            </Text>
-                                            <Select
-                                                placeholder="Select column"
-                                                data={sourceColumns}
-                                                value={mapping[header]}
-                                                onChange={(val) => updateMapping(header, val)}
-                                                size="md"
-                                                variant="filled"
-                                                radius="md"
-                                                clearable
-                                                searchable
-                                                comboboxProps={{ shadow: 'md', radius: 'md' }}
-                                            />
-                                        </Stack>
-                                    </Paper>
-                                ))}
-                            </SimpleGrid>
-                            <Button
-                                mt="md"
-                                variant="light"
-                                color="cyan"
-                                fullWidth
-                                leftSection={<Sparkles size={16} />}
-                                onClick={async () => {
-                                    setMappingStatus('AI Suggesting Mappings...');
-                                    setIsMapping(true);
-                                    try {
-                                        const response = await axios.post('/api/v1/ai-fix', {
-                                            type: 'mapping',
-                                            data: { sourceColumns, templateHeaders }
-                                        });
-                                        if (response.data.success) {
-                                            setMapping(response.data.result);
-                                        }
-                                    } finally {
-                                        setIsMapping(false);
-                                    }
-                                }}
-                            >
-                                AI Suggest Mapping
-                            </Button>
-                        </Card>
-                    </Grid.Col>
-
-                    <Grid.Col span={{ base: 12, md: 12, lg: 4 }}>
-                        <Card withBorder radius="md" padding="lg" bg="gray.0" shadow="xs" h="100%">
-                            <Title order={4} mb="md">Detected Source Fields</Title>
-                            <Text size="xs" c="dimmed" mb="md">These fields were successfully extracted from your customer document:</Text>
-                            <Group gap="xs">
-                                {sourceColumns.map(col => (
-                                    <Badge key={col} variant="outline" color="gray" radius="sm" size="sm">
-                                        {col}
-                                    </Badge>
-                                ))}
-                                {sourceColumns.length === 0 && (
-                                    <Alert color="red" icon={<AlertCircle size={16} />} title="No Headers Found" variant="light" w="100%">
-                                        The engine could not find any headers in the customer document. Please check the file format.
-                                    </Alert>
-                                )}
+                    {/* 1. Detected Source Fields - Top Panorama View */}
+                    <Grid.Col span={12}>
+                        <Card withBorder radius="md" padding="md" bg="blue.0" shadow="xs" style={{ borderBottom: '2px solid var(--mantine-color-blue-2)' }}>
+                            <Group justify="space-between" mb="xs">
+                                <Group gap="xs">
+                                    <LayoutPanelLeft size={20} color="var(--mantine-color-blue-7)" />
+                                    <Title order={4} c="blue.9">Detected Document Fields</Title>
+                                </Group>
+                                <Badge variant="filled" color="blue" radius="sm">{sourceColumns.length} Fields Found</Badge>
                             </Group>
+                            <Box p="xs" bg="white" radius="md" style={{ border: '1px dashed var(--mantine-color-blue-3)' }}>
+                                <Group gap="sm" wrap="wrap">
+                                    {sourceColumns.map(col => (
+                                        <Text key={col} fw={600} size="sm" c="gray.7" bg="gray.1" px="md" py={4} radius="xl" style={{ border: '1px solid var(--mantine-color-gray-3)' }}>
+                                            {col}
+                                        </Text>
+                                    ))}
+                                    {sourceColumns.length === 0 && <Text size="sm" c="red" fw={600}>Warning: No headers detected in this document.</Text>}
+                                </Group>
+                            </Box>
                         </Card>
                     </Grid.Col>
 
+                    {/* 2. Mapping Alignment - Full Width 3-Column Grid */}
+                    <Grid.Col span={12}>
+                        <Card withBorder radius="md" padding="lg" shadow="sm">
+                            <Group justify="space-between" mb="xl">
+                                <Stack gap={5}>
+                                    <Title order={4}>Mapping Alignment</Title>
+                                    <Text size="xs" c="dimmed">Assign source fields to target template structure.</Text>
+                                </Stack>
+                                <Group gap="xs">
+                                    <Select
+                                        placeholder="Select Target Template"
+                                        data={PREDEFINED_TEMPLATES}
+                                        value={selectedTemplateId}
+                                        onChange={handleTemplateChange}
+                                        size="xs"
+                                        radius="md"
+                                        style={{ width: 250 }}
+                                    />
+                                    <FileButton onChange={handleCustomTemplateUpload} accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
+                                        {(props) => (
+                                            <Button {...props} variant="light" color="gray" size="xs" radius="md">
+                                                Upload Sample File
+                                            </Button>
+                                        )}
+                                    </FileButton>
+                                    <Button
+                                        variant="light"
+                                        color="cyan"
+                                        size="xs"
+                                        radius="md"
+                                        disabled={templateHeaders.length === 0}
+                                        leftSection={<Sparkles size={16} />}
+                                        onClick={async () => {
+                                            setMappingStatus('AI Suggesting Mappings...');
+                                            setIsMapping(true);
+                                            try {
+                                                const response = await axios.post('/api/v1/ai-fix', {
+                                                    type: 'mapping',
+                                                    data: { sourceColumns, templateHeaders }
+                                                });
+                                                if (response.data.success) {
+                                                    setMapping(response.data.result);
+                                                }
+                                            } finally {
+                                                setIsMapping(false);
+                                            }
+                                        }}
+                                    >
+                                        AI Suggest Mapping
+                                    </Button>
+                                </Group>
+                            </Group>
+                            
+                            {templateHeaders.length === 0 ? (
+                                <Center py="xl">
+                                    <Stack align="center" gap="xs">
+                                        <AlertCircle size={32} color="var(--mantine-color-gray-4)" />
+                                        <Text c="dimmed" size="sm">No target template selected. Please select one above to start mapping.</Text>
+                                    </Stack>
+                                </Center>
+                            ) : (
+                                <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
+                                    {templateHeaders.map(header => (
+                                        <Paper key={header} withBorder p="sm" radius="md" bg="gray.0" style={{ borderColor: 'var(--mantine-color-gray-2)' }}>
+                                            <Stack gap={4}>
+                                                <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase' }}>
+                                                    {header}
+                                                </Text>
+                                                <Select
+                                                    placeholder="Select column"
+                                                    data={sourceColumns}
+                                                    value={mapping[header]}
+                                                    onChange={(val) => updateMapping(header, val)}
+                                                    size="sm"
+                                                    variant="filled"
+                                                    radius="md"
+                                                    clearable
+                                                    searchable
+                                                />
+                                            </Stack>
+                                        </Paper>
+                                    ))}
+                                </SimpleGrid>
+                            )}
+                        </Card>
+                    </Grid.Col>
+
+                    {/* 3. Bulk Setup Bar */}
                     {hasPasswordHeader && (
-                        <Grid.Col span={{ base: 12, md: 12, lg: 4 }}>
-                            <Card withBorder radius="md" padding="lg" style={{ borderLeft: '4px solid var(--mantine-color-teal-6)' }} shadow="sm">
-                                <Title order={4} mb="xs">Bulk Password Update</Title>
-                                <Text size="xs" c="dimmed" mb="md">Set the same password for all records instantly.</Text>
-                                <Stack gap="sm">
-                                    <Group grow align="flex-end">
+                        <Grid.Col span={12}>
+                            <Card withBorder radius="md" padding="md" shadow="sm" style={{ borderLeft: '4px solid var(--mantine-color-teal-6)' }}>
+                                <Group justify="space-between" align="center">
+                                    <Group gap="md">
+                                        <div style={{ backgroundColor: 'var(--mantine-color-teal-0)', padding: '10px', borderRadius: '8px' }}>
+                                            <Settings2 size={24} color="var(--mantine-color-teal-6)" />
+                                        </div>
+                                        <div>
+                                            <Title order={5}>Bulk Password Update</Title>
+                                            <Text size="xs" c="dimmed">Set the same password for all records instantly.</Text>
+                                        </div>
+                                    </Group>
+                                    
+                                    <Group gap="sm" grow={false} wrap="nowrap">
                                         <TextInput 
-                                            label="Fixed Password"
-                                            placeholder="Enter password..."
+                                            placeholder="Enter fixed password..."
                                             value={bulkPassword}
                                             onChange={(e) => setBulkPassword(e.currentTarget.value)}
                                             size="sm"
+                                            w={250}
                                         />
-                                        <Button 
-                                            variant="filled" 
-                                            color="teal" 
-                                            onClick={handleBulkPasswordUpdate}
-                                            disabled={!bulkPassword.trim()}
-                                            leftSection={<Check size={16} />}
-                                            size="sm"
-                                        >
-                                            Apply
-                                        </Button>
+                                        <Button variant="filled" color="teal" size="sm" onClick={handleBulkPasswordUpdate}>Apply to All</Button>
+                                        <Button variant="outline" color="indigo" size="sm" onClick={handleAutoGeneratePasswords}>Auto-Generate</Button>
                                     </Group>
-
-                                    <Divider label="OR" labelPosition="center" my="xs" />
-
-                                    <Button 
-                                        variant="outline" 
-                                        color="indigo" 
-                                        onClick={handleAutoGeneratePasswords}
-                                        leftSection={<RefreshCw size={16} />}
-                                        size="sm"
-                                        fullWidth
-                                    >
-                                        Auto-Generate (Unique Password)
-                                    </Button>
-                                </Stack>
+                                </Group>
                             </Card>
                         </Grid.Col>
                     )}
                 </Grid>
 
+                {/* 4. Smart AI Assistant */}
                 <Card withBorder radius="md" mb="xl" padding="lg" shadow="sm" style={{ borderLeft: '4px solid var(--mantine-color-indigo-6)' }}>
-                    <Group justify="space-between" mb="xs">
-                        <Group gap="xs">
-                            <Wand2 size={20} color="var(--mantine-color-indigo-6)" />
-                            <Title order={4}>Smart AI Assistant</Title>
+                    <Group justify="space-between" align="center" mb="md">
+                        <Group gap="md">
+                            <div style={{ backgroundColor: 'var(--mantine-color-indigo-0)', padding: '10px', borderRadius: '8px' }}>
+                                <Sparkles size={24} color="var(--mantine-color-indigo-6)" />
+                            </div>
+                            <div>
+                                <Title order={4}>Smart AI Assistant</Title>
+                                <Text size="xs" c="dimmed">Instruct AI to modify all data (e.g., "Translate names to Marathi", "Clean up currency", "Format dates as DD-MM-YYYY")</Text>
+                            </div>
                         </Group>
-                        {isTransforming && <Badge variant="dot" color="indigo">AI is thinking...</Badge>}
-                    </Group>
-                    <Text size="sm" c="dimmed" mb="md">
-                        Type an instruction to modify all extracted data at once. (e.g., "Translate names to Marathi", "Clean up currency", "Format dates as DD-MM-YYYY")
-                    </Text>
-                    <Flex 
-                        direction={{ base: 'column', sm: 'row' }} 
-                        gap="md" 
-                        align={{ base: 'stretch', sm: 'flex-end' }}
-                    >
-                        <TextInput
-                            placeholder="Enter transformation instruction..."
-                            style={{ flex: 1 }}
-                            value={userPrompt}
-                            onChange={(e) => setUserPrompt(e.currentTarget.value)}
-                            disabled={isTransforming}
-                            onKeyDown={(e) => e.key === 'Enter' && handleAITransform()}
-                            size="md"
-                        />
                         <Button 
                             variant="light" 
                             color="indigo" 
@@ -857,16 +923,31 @@ const Preview = () => {
                             onClick={handleSaveProgress}
                             loading={isSaving}
                             disabled={!jobId}
+                            size="md"
                         >
                             Save Progress
                         </Button>
-
+                    </Group>
+                    
+                    <Flex gap="md" align="center">
+                        <TextInput
+                            placeholder='Describe your transformation instruction...'
+                            style={{ flex: 1 }}
+                            value={userPrompt}
+                            onChange={(e) => setUserPrompt(e.currentTarget.value)}
+                            disabled={isTransforming}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAITransform()}
+                            size="lg"
+                            radius="md"
+                        />
                         <Button 
                             color="indigo" 
-                            leftSection={<Sparkles size={16} />}
+                            px={40}
+                            leftSection={<Wand2 size={18} />}
                             loading={isTransforming}
                             onClick={handleAITransform}
-                            size="md"
+                            size="lg"
+                            radius="md"
                         >
                             Apply Magic
                         </Button>
@@ -882,6 +963,25 @@ const Preview = () => {
                         w={300}
                     />
                     <Group gap="xs">
+                        <Button 
+                            variant="light" 
+                            color="indigo" 
+                            leftSection={<CheckCircle2 size={16} />}
+                            onClick={() => {
+                                const newRow = {};
+                                sourceColumns.forEach(col => {
+                                    newRow[col] = '';
+                                });
+                                setRawRows([...rawRows, newRow]);
+                                notifications.show({
+                                    title: 'Row Added',
+                                    message: 'A new blank row has been added to the bottom of the table.',
+                                    color: 'indigo'
+                                });
+                            }}
+                        >
+                            Add New Row
+                        </Button>
                         {selectedRows.size > 0 && (
                             <Badge variant="light" color="indigo" size="lg">
                                 {selectedRows.size} rows selected
@@ -905,127 +1005,163 @@ const Preview = () => {
 
                 <Divider label="Data Preview (Mapped Result)" labelPosition="center" mb="xl" />
 
-                <Card shadow="sm" radius="md" withBorder padding={0}>
-                    <Table.ScrollContainer minWidth={800}>
-                        <Table verticalSpacing="md" highlightOnHover striped withColumnBorders>
-                            <Table.Thead bg="indigo.0">
-                                <Table.Tr>
-                                    <Table.Th w={40}>
-                                        <Checkbox 
-                                            checked={selectedRows.size === rawRows.length && rawRows.length > 0} 
-                                            indeterminate={selectedRows.size > 0 && selectedRows.size < rawRows.length}
-                                            onChange={toggleAll}
+                <Grid gutter="md">
+                    {showSource && customerFileUrl && (
+                        <Grid.Col span={{ base: 12, md: 5 }}>
+                            <Card withBorder radius="md" p={0} h="calc(100vh - 200px)" style={{ position: 'sticky', top: 20 }}>
+                                <Group p="xs" justify="space-between" bg="gray.0" style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}>
+                                    <Text size="sm" fw={700}>Source Document</Text>
+                                    <ActionIcon variant="subtle" color="gray" onClick={() => setShowSource(false)}><X size={16} /></ActionIcon>
+                                </Group>
+                                <Box h="100%" style={{ overflow: 'hidden' }}>
+                                    {customerFileUrl.toLowerCase().includes('.pdf') ? (
+                                        <iframe 
+                                            src={customerFileUrl} 
+                                            width="100%" 
+                                            height="100%" 
+                                            style={{ border: 'none' }} 
+                                            title="Source PDF"
                                         />
-                                    </Table.Th>
-                                    {templateHeaders.map(header => (
-                                        <Table.Th key={header} c="indigo.9" fw={900}>
-                                            <Group gap="xs" justify="space-between" wrap="nowrap">
-                                                {header}
-                                                <ActionIcon 
-                                                    variant="subtle" 
-                                                    color="indigo" 
-                                                    size="xs" 
-                                                    onClick={() => setActiveCol(header)}
-                                                    title={`AI actions for ${header}`}
-                                                >
-                                                    <Sparkles size={12} />
-                                                </ActionIcon>
-                                            </Group>
-                                        </Table.Th>
-                                    ))}
-                                    <Table.Th w={50}></Table.Th>
-                                </Table.Tr>
-                            </Table.Thead>
-                            <Table.Tbody>
-                                {filteredRows.map((row, displayIdx) => {
-                                    const actualIdx = rawRows.indexOf(row);
-                                    return (
-                                        <Table.Tr key={actualIdx} bg={selectedRows.has(actualIdx) ? 'indigo.0' : undefined}>
-                                            <Table.Td>
-                                                <Checkbox 
-                                                    checked={selectedRows.has(actualIdx)} 
-                                                    onChange={() => toggleRow(actualIdx)} 
+                                    ) : (
+                                        <ScrollArea h="100%">
+                                            <Center p="md">
+                                                <img 
+                                                    src={customerFileUrl} 
+                                                    alt="Source Document" 
+                                                    style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }} 
                                                 />
-                                            </Table.Td>
-                                            {templateHeaders.map(header => {
-                                                const sourceCol = mapping[header];
-                                                const value = row[sourceCol] || '';
-                                                const isInRange = isDragging && dragStart?.colName === sourceCol && (
-                                                    (actualIdx >= dragStart.rowIdx && actualIdx <= dragEnd) ||
-                                                    (actualIdx <= dragStart.rowIdx && actualIdx >= dragEnd)
-                                                );
-
-                                                return (
-                                                    <Table.Td 
-                                                        key={header} 
-                                                        style={{ 
-                                                            padding: 0,
-                                                            backgroundColor: isInRange ? 'var(--mantine-color-indigo-1)' : 'white'
-                                                        }}
-                                                        onMouseEnter={() => handleHoverDrag(actualIdx)}
-                                                    >
-                                                        <TextInput
-                                                            variant="unstyled"
-                                                            size="xs"
-                                                            value={value}
-                                                            onMouseDown={() => handleStartDrag(actualIdx, sourceCol)}
-                                                            onChange={(e) => {
-                                                                const newRows = [...rawRows];
-                                                                newRows[actualIdx][sourceCol] = e.currentTarget.value;
-                                                                setRawRows(newRows);
-                                                            }}
-                                                            styles={{
-                                                                input: { 
-                                                                    minHeight: 'unset', 
-                                                                    height: 'auto', 
-                                                                    padding: '8px',
-                                                                    cursor: 'cell',
-                                                                    backgroundColor: 'transparent',
-                                                                    '&:focus': { backgroundColor: 'var(--mantine-color-indigo-0)' }
-                                                                }
-                                                            }}
+                                            </Center>
+                                        </ScrollArea>
+                                    )}
+                                </Box>
+                            </Card>
+                        </Grid.Col>
+                    )}
+                    
+                    <Grid.Col span={{ base: 12, md: showSource ? 7 : 12 }}>
+                        <Card shadow="sm" radius="md" withBorder padding={0}>
+                            <Table.ScrollContainer minWidth={800}>
+                                <Table verticalSpacing="md" highlightOnHover striped withColumnBorders>
+                                    <Table.Thead bg="indigo.0">
+                                        <Table.Tr>
+                                            <Table.Th w={40}>
+                                                <Checkbox 
+                                                    checked={selectedRows.size === rawRows.length && rawRows.length > 0} 
+                                                    indeterminate={selectedRows.size > 0 && selectedRows.size < rawRows.length}
+                                                    onChange={toggleAll}
+                                                />
+                                            </Table.Th>
+                                            {templateHeaders.map(header => (
+                                                <Table.Th key={header} c="indigo.9" fw={900}>
+                                                    <Group gap="xs" justify="space-between" wrap="nowrap">
+                                                        {header}
+                                                        <ActionIcon 
+                                                            variant="subtle" 
+                                                            color="indigo" 
+                                                            size="xs" 
+                                                            onClick={() => setActiveCol(header)}
+                                                            title={`AI actions for ${header}`}
+                                                        >
+                                                            <Sparkles size={12} />
+                                                        </ActionIcon>
+                                                    </Group>
+                                                </Table.Th>
+                                            ))}
+                                            <Table.Th w={50}></Table.Th>
+                                        </Table.Tr>
+                                    </Table.Thead>
+                                    <Table.Tbody>
+                                        {filteredRows.map((row, displayIdx) => {
+                                            const actualIdx = rawRows.indexOf(row);
+                                            return (
+                                                <Table.Tr key={actualIdx} bg={selectedRows.has(actualIdx) ? 'indigo.0' : undefined}>
+                                                    <Table.Td>
+                                                        <Checkbox 
+                                                            checked={selectedRows.has(actualIdx)} 
+                                                            onChange={() => toggleRow(actualIdx)} 
                                                         />
                                                     </Table.Td>
-                                                );
-                                            })}
-                                            <Table.Td>
-                                                <Group gap="xs" wrap="nowrap">
-                                                    <ActionIcon 
-                                                        variant="light" 
-                                                        color="cyan" 
-                                                        size="sm" 
-                                                        onClick={() => fixRowWithAI(actualIdx)}
-                                                        title="Fix with AI"
-                                                    >
-                                                        <Sparkles size={14} />
-                                                    </ActionIcon>
-                                                    <ActionIcon variant="light" color="red" size="sm" onClick={() => {
-                                                        const newRows = rawRows.filter((_, i) => i !== actualIdx);
-                                                        setRawRows(newRows);
-                                                        const nextSelected = new Set(selectedRows);
-                                                        nextSelected.delete(actualIdx);
-                                                        setSelectedRows(nextSelected);
-                                                    }}>
-                                                        <Trash2 size={14} />
-                                                    </ActionIcon>
-                                                </Group>
-                                            </Table.Td>
-                                        </Table.Tr>
-                                    );
-                                })}
-                                {filteredRows.length === 0 && (
-                                    <Table.Tr>
-                                        <Table.Td colSpan={templateHeaders.length + 2}>
-                                            <Center py="xl">
-                                                <Text c="dimmed">No data matching your search.</Text>
-                                            </Center>
-                                        </Table.Td>
-                                    </Table.Tr>
-                                )}
-                            </Table.Tbody>
-                        </Table>
-                    </Table.ScrollContainer>
-                </Card>
+                                                    {templateHeaders.map(header => {
+                                                        const sourceCol = mapping[header];
+                                                        const value = row[sourceCol] || '';
+                                                        const isInRange = isDragging && dragStart?.colName === sourceCol && (
+                                                            (actualIdx >= dragStart.rowIdx && actualIdx <= dragEnd) ||
+                                                            (actualIdx <= dragStart.rowIdx && actualIdx >= dragEnd)
+                                                        );
+
+                                                        return (
+                                                            <Table.Td 
+                                                                key={header} 
+                                                                style={{ 
+                                                                    padding: 0,
+                                                                    backgroundColor: isInRange ? 'var(--mantine-color-indigo-1)' : 'white'
+                                                                }}
+                                                                onMouseEnter={() => handleHoverDrag(actualIdx)}
+                                                            >
+                                                                <TextInput
+                                                                    variant="unstyled"
+                                                                    size="xs"
+                                                                    value={value}
+                                                                    onMouseDown={() => handleStartDrag(actualIdx, sourceCol)}
+                                                                    onChange={(e) => {
+                                                                        const newRows = [...rawRows];
+                                                                        newRows[actualIdx][sourceCol] = e.currentTarget.value;
+                                                                        setRawRows(newRows);
+                                                                    }}
+                                                                    styles={{
+                                                                        input: { 
+                                                                            minHeight: 'unset', 
+                                                                            height: 'auto', 
+                                                                            padding: '8px',
+                                                                            cursor: 'cell',
+                                                                            backgroundColor: 'transparent',
+                                                                            '&:focus': { backgroundColor: 'var(--mantine-color-indigo-0)' }
+                                                                        }
+                                                                    }}
+                                                                />
+                                                            </Table.Td>
+                                                        );
+                                                    })}
+                                                    <Table.Td>
+                                                        <Group gap="xs" wrap="nowrap">
+                                                            <ActionIcon 
+                                                                variant="light" 
+                                                                color="cyan" 
+                                                                size="sm" 
+                                                                onClick={() => fixRowWithAI(actualIdx)}
+                                                                title="Fix with AI"
+                                                            >
+                                                                <Sparkles size={14} />
+                                                            </ActionIcon>
+                                                            <ActionIcon variant="light" color="red" size="sm" onClick={() => {
+                                                                const newRows = rawRows.filter((_, i) => i !== actualIdx);
+                                                                setRawRows(newRows);
+                                                                const nextSelected = new Set(selectedRows);
+                                                                nextSelected.delete(actualIdx);
+                                                                setSelectedRows(nextSelected);
+                                                            }}>
+                                                                <Trash2 size={14} />
+                                                            </ActionIcon>
+                                                        </Group>
+                                                    </Table.Td>
+                                                </Table.Tr>
+                                            );
+                                        })}
+                                        {filteredRows.length === 0 && (
+                                            <Table.Tr>
+                                                <Table.Td colSpan={templateHeaders.length + 2}>
+                                                    <Center py="xl">
+                                                        <Text c="dimmed">No data matching your search.</Text>
+                                                    </Center>
+                                                </Table.Td>
+                                            </Table.Tr>
+                                        )}
+                                    </Table.Tbody>
+                                </Table>
+                            </Table.ScrollContainer>
+                        </Card>
+                    </Grid.Col>
+                </Grid>
 
                 {/* Column specific AI Modal */}
                 <Modal 

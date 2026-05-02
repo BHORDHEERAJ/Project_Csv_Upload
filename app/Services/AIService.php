@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Log;
 class AIService
 {
     protected $geminiKeys = [];
-    protected $currentKeyIndex = 0;
+    protected static $blacklistedKeys = [];
 
     public function __construct()
     {
@@ -24,22 +24,44 @@ class AIService
             config('services.gemini.key_9'),
             config('services.gemini.key_10'),
         ]));
+
+        if (!empty($this->geminiKeys)) {
+            $this->currentKeyIndex = rand(0, count($this->geminiKeys) - 1);
+        }
     }
 
     protected function getNextGeminiKey()
     {
         if (empty($this->geminiKeys)) return null;
-        $key = $this->geminiKeys[$this->currentKeyIndex];
-        $this->currentKeyIndex = ($this->currentKeyIndex + 1) % count($this->geminiKeys);
-        return $key;
+        
+        $availableKeys = array_values(array_filter($this->geminiKeys, function($key) {
+            $expiry = self::$blacklistedKeys[$key] ?? 0;
+            return time() > $expiry;
+        }));
+
+        if (empty($availableKeys)) {
+            Log::warning("All Gemini keys are currently rate-limited. Clearing blacklist to retry.");
+            self::$blacklistedKeys = [];
+            $availableKeys = $this->geminiKeys;
+        }
+
+        return $availableKeys[rand(0, count($availableKeys) - 1)];
     }
+
+    protected $systemPrompt = "You are a professional Data Extraction Engine specialized in OCR and tabular data. 
+    - Maintain 100% verbatim accuracy for both English and Marathi text.
+    - Preserve Unicode characters exactly.
+    - Detect headers and rows even in noisy or distorted images (e.g., photos of screens).
+    - Return ONLY valid, minified JSON objects.";
 
     public function process(string $prompt, array $context, string $targetProvider = 'gemini')
     {
+        $fullPrompt = "{$this->systemPrompt}\n\nTask: {$prompt}";
+        
         // 1. Try Gemini (Primary)
         if ($targetProvider === 'gemini') {
             try {
-                return $this->callGemini($prompt, $context);
+                return $this->callGemini($fullPrompt, $context);
             } catch (\Exception $e) {
                 Log::warning("Gemini failed, trying fallbacks: " . $e->getMessage());
             }
@@ -49,7 +71,7 @@ class AIService
         $groqKey = config('services.groq.key') ?: (str_starts_with(config('services.grok.key', ''), 'gsk_') ? config('services.grok.key') : null);
         if ($groqKey) {
             try {
-                return $this->callGroq($prompt, $context, $groqKey);
+                return $this->callGroq($fullPrompt, $context, $groqKey);
             } catch (\Exception $e) {
                 Log::warning("Groq failed, trying Grok: " . $e->getMessage());
             }
@@ -58,7 +80,7 @@ class AIService
         // 3. Try Grok (xAI)
         if (config('services.grok.key') && !str_starts_with(config('services.grok.key'), 'gsk_')) {
             try {
-                return $this->callGrok($prompt, $context);
+                return $this->callGrok($fullPrompt, $context);
             } catch (\Exception $e) {
                 Log::warning("Grok failed, trying OpenAI: " . $e->getMessage());
             }
@@ -67,7 +89,7 @@ class AIService
         // 4. Try OpenAI (Final Fallback)
         if (config('services.openai.key')) {
             try {
-                return $this->callOpenAI($prompt, $context);
+                return $this->callOpenAI($fullPrompt, $context);
             } catch (\Exception $e) {
                 Log::error("All AI providers failed: " . $e->getMessage());
             }
@@ -81,7 +103,7 @@ class AIService
         $model = config('services.groq.model') ?: 'llama-3.3-70b-versatile';
         $fullPrompt = "{$prompt}\n\nReturn JSON only.\n\nContext:\n" . json_encode($context);
 
-        $response = Http::withToken($apiKey)->timeout(30)->post('https://api.groq.com/openai/v1/chat/completions', [
+        $response = Http::withToken($apiKey)->timeout(120)->post('https://api.groq.com/openai/v1/chat/completions', [
             'model' => $model,
             'messages' => [
                 ['role' => 'user', 'content' => $fullPrompt]
@@ -98,40 +120,50 @@ class AIService
 
     protected function callGemini(string $prompt, array $context)
     {
-        $retries = 3;
-        $model = config('services.gemini.model');
+        $maxKeyAttempts = count($this->geminiKeys) ?: 3; 
+        $model = config('services.gemini.fallback_model') ?: config('services.gemini.model');
 
-        while ($retries > 0) {
+        for ($attempt = 0; $attempt < $maxKeyAttempts; $attempt++) {
             $apiKey = $this->getNextGeminiKey();
-            if (!$apiKey) throw new \Exception("No Gemini API keys found.");
+            if (!$apiKey) throw new \Exception("No active Gemini API keys available.");
 
             $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
+            $fullPrompt = "{$prompt}\n\nContext Data:\n" . json_encode($context);
 
-            $fullPrompt = "{$prompt}\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no backticks, no extra text.\n\nContext Data:\n" . json_encode($context);
+            try {
+                $response = Http::timeout(120)->post($url, [
+                    'contents' => [
+                        ['parts' => [['text' => $fullPrompt]]]
+                    ]
+                ]);
 
-            $response = Http::timeout(60)->post($url, [
-                'contents' => [
-                    ['parts' => [['text' => $fullPrompt]]]
-                ]
-            ]);
+                if ($response->successful()) {
+                    $data = $response->json();
+                    $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                    return $this->parseJson($text);
+                }
 
-            if ($response->successful()) {
-                $data = $response->json();
-                $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-                return $this->parseJson($text);
+                if ($response->status() === 429) {
+                    Log::info("Gemini key rate-limited (429). Blacklisting and rotating key.");
+                    self::$blacklistedKeys[$apiKey] = time() + 60; // 1 minute blacklist
+                    continue; // Immediately try another key
+                }
+
+                if ($response->status() === 503 || $response->status() === 500) {
+                    Log::warning("Gemini server error ({$response->status()}). Retrying with next key.");
+                    continue;
+                }
+
+                throw new \Exception("Gemini API error (" . $response->status() . "): " . $response->body());
+
+            } catch (\Exception $e) {
+                if ($attempt === $maxKeyAttempts - 1) throw $e;
+                Log::error("Gemini attempt failed: " . $e->getMessage());
+                usleep(500000); // 0.5s safety wait
             }
-
-            // Handle rate limits or other issues
-            if ($response->status() === 429 || $response->status() === 503) {
-                $retries--;
-                usleep(500000); // 0.5s wait
-                continue;
-            }
-
-            throw new \Exception("Gemini API error: " . $response->body());
         }
 
-        throw new \Exception("Gemini failed after retries.");
+        throw new \Exception("Gemini failed after trying multiple healthy keys.");
     }
 
     protected function callOpenAI(string $prompt, array $context)
@@ -141,7 +173,7 @@ class AIService
 
         $fullPrompt = "{$prompt}\n\nIMPORTANT: Return ONLY valid JSON.\n\nContext Data:\n" . json_encode($context);
 
-        $response = Http::withToken($apiKey)->timeout(60)->post('https://api.openai.com/v1/chat/completions', [
+        $response = Http::withToken($apiKey)->timeout(120)->post('https://api.openai.com/v1/chat/completions', [
             'model' => $model,
             'messages' => [
                 ['role' => 'system', 'content' => 'You are a data assistant. Output only JSON.'],
@@ -164,7 +196,7 @@ class AIService
 
         $fullPrompt = "{$prompt}\n\nIMPORTANT: Return ONLY valid JSON block.\n\nContext Data:\n" . json_encode($context);
 
-        $response = Http::withToken($apiKey)->timeout(60)->post('https://api.x.ai/v1/chat/completions', [
+        $response = Http::withToken($apiKey)->timeout(120)->post('https://api.x.ai/v1/chat/completions', [
             'model' => $model,
             'messages' => [
                 ['role' => 'system', 'content' => 'You are a data assistant. Output only JSON.'],
@@ -219,6 +251,21 @@ class AIService
         return $this->process($prompt, ['sourceColumns' => $sourceColumns, 'templateHeaders' => $templateHeaders]);
     }
 
+    public function suggestMappingWithContext(array $sourceColumns, array $templateHeaders, array $sampleRows)
+    {
+        $prompt = "You are a data mapping expert.
+        I have source columns and their sample data. I need to map them to target template headers.
+        
+        Source Columns: " . implode(', ', $sourceColumns) . "
+        Sample Data (first 3 rows): " . json_encode(array_slice($sampleRows, 0, 3)) . "
+        Target Headers: " . implode(', ', $templateHeaders) . "
+        
+        Return a JSON object where keys are the Target Headers and values are the matching Source Column names.
+        If no good match exists for a target header, omit it or set to null.";
+        
+        return $this->process($prompt, []);
+    }
+
     public function transformData(array $rows, string $userPrompt)
     {
         $prompt = "You are a data transformation engine. User instruction: \"{$userPrompt}\". Apply this to all rows. Ensure Marathi text is supported. Return a JSON object with a 'transformedRows' property containing the array of updated rows.";
@@ -227,36 +274,128 @@ class AIService
 
     public function processWithFile(string $prompt, string $filePath, string $mimeType)
     {
-        $apiKey = $this->getNextGeminiKey();
-        $model = config('services.gemini.model');
-        $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
+        // 1. Try Gemini (Primary - Multimodal)
+        $models = array_filter([
+            config('services.gemini.fallback_model'), // gemini-2.0-flash
+            config('services.gemini.model'),          // gemini-1.5-flash
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-8b',
+        ]);
+        
+        $lastException = null;
 
-        $fileData = base64_encode(file_get_contents($filePath));
+        foreach ($models as $model) {
+            // Force v1beta for extraction as it handles multimodal more consistently across key types
+            $version = 'v1beta'; 
+            $retries = 3;
+            while ($retries > 0) {
+                $apiKey = $this->getNextGeminiKey();
+                if (!$apiKey) break;
 
-        $payload = [
-            'contents' => [
-                [
-                    'parts' => [
-                        ['text' => "{$prompt}\n\nIMPORTANT: Return ONLY valid JSON."],
-                        [
-                            'inline_data' => [
-                                'mime_type' => $mimeType,
-                                'data' => $fileData
+                Log::info("Attempting multimodal OCR with Gemini {$model} using API Key Index: {$this->currentKeyIndex}");
+
+                $url = "https://generativelanguage.googleapis.com/{$version}/models/{$model}:generateContent?key={$apiKey}";
+                $fileData = base64_encode(file_get_contents($filePath));
+
+                try {
+                    $response = Http::timeout(120)->post($url, [
+                        'contents' => [
+                            [
+                                'parts' => [
+                                    ['text' => "{$this->systemPrompt}\n\nTask: {$prompt}"],
+                                    ['inline_data' => ['mime_type' => $mimeType, 'data' => $fileData]]
+                                ]
                             ]
                         ]
-                    ]
-                ]
-            ]
-        ];
+                    ]);
 
-        $response = Http::timeout(120)->post($url, $payload);
+                    if ($response->successful()) {
+                        $text = $response->json()['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                        if (!empty($text)) return $this->parseJson($text);
+                    }
 
-        if ($response->successful()) {
-            $data = $response->json();
-            $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-            return $this->parseJson($text);
+                    if ($response->status() === 429 || $response->status() === 503) {
+                        $retries--;
+                        Log::warning("Gemini {$model} rate limited, retrying...");
+                        usleep(1000000);
+                        continue;
+                    }
+                    
+                    Log::error("Gemini {$model} failed: " . $response->body());
+                    break; 
+
+                } catch (\Exception $e) {
+                    $lastException = $e;
+                    break;
+                }
+            }
         }
 
-        throw new \Exception("Gemini multimodal failed: " . $response->body());
+        // 2. Try Groq Vision Fallback
+        $groqKey = config('services.groq.key');
+        if ($groqKey) {
+            try {
+                Log::info("Falling back to Groq Vision (Llama 3.2)");
+                $fileData = base64_encode(file_get_contents($filePath));
+                $response = Http::withToken($groqKey)->timeout(120)->post('https://api.groq.com/openai/v1/chat/completions', [
+                    'model' => 'llama-3.2-11b-vision-preview',
+                    'messages' => [
+                        [
+                            'role' => 'user',
+                            'content' => [
+                                ['type' => 'text', 'text' => "{$this->systemPrompt}\n\nTask: {$prompt}"],
+                                [
+                                    'type' => 'image_url',
+                                    'image_url' => ['url' => "data:{$mimeType};base64,{$fileData}"]
+                                ]
+                            ]
+                        ]
+                    ],
+                    'response_format' => ['type' => 'json_object']
+                ]);
+
+                if ($response->successful()) {
+                    return $this->parseJson($response->json()['choices'][0]['message']['content']);
+                }
+                Log::error("Groq Vision failed: " . $response->body());
+            } catch (\Exception $e) {
+                Log::error("Groq Vision exception: " . $e->getMessage());
+            }
+        }
+
+        // 3. Try OpenAI Vision Fallback
+        $openAIKey = config('services.openai.key');
+        if ($openAIKey) {
+            try {
+                Log::info("Falling back to OpenAI Vision (GPT-4o-mini)");
+                $fileData = base64_encode(file_get_contents($filePath));
+                $response = Http::withToken($openAIKey)->timeout(120)->post('https://api.openai.com/v1/chat/completions', [
+                    'model' => 'gpt-4o-mini',
+                    'messages' => [
+                        [
+                            'role' => 'user',
+                            'content' => [
+                                ['type' => 'text', 'text' => "{$this->systemPrompt}\n\nTask: {$prompt}"],
+                                [
+                                    'type' => 'image_url',
+                                    'image_url' => ['url' => "data:{$mimeType};base64,{$fileData}"]
+                                ]
+                            ]
+                        ]
+                    ],
+                    'response_format' => ['type' => 'json_object']
+                ]);
+
+                if ($response->successful()) {
+                    return $this->parseJson($response->json()['choices'][0]['message']['content']);
+                }
+                Log::error("OpenAI Vision failed: " . $response->body());
+            } catch (\Exception $e) {
+                Log::error("OpenAI Vision exception: " . $e->getMessage());
+            }
+        }
+
+        throw new \Exception("All Multimodal AI Models failed. Check API keys for Gemini, Groq, or OpenAI.");
     }
 }
+

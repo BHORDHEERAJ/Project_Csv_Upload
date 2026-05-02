@@ -56,7 +56,7 @@ class DashboardController extends Controller
                     'id' => $job->id,
                     'session_id' => $job->session_id,
                     'name' => $job->customerFile ? $job->customerFile->original_name : 'Unknown File',
-                    'date' => $job->created_at->format('Y-m-d H:i'),
+                    'date' => $job->created_at->timezone('Asia/Kolkata')->format('d-m-Y h:i A'),
                     'status' => $job->status,
                     'accuracy' => $accuracy,
                 ];

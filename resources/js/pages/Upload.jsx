@@ -1,28 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Title, Text, SimpleGrid, Card, Group, Button, Progress, List, ThemeIcon, Stack, Paper, Center, Select, SegmentedControl, ActionIcon, Tooltip } from '@mantine/core';
+import { Title, Text, SimpleGrid, Card, Group, Button, Progress, List, ThemeIcon, Stack, Paper, Center, Select, SegmentedControl, ActionIcon, Tooltip, Badge } from '@mantine/core';
 import { Dropzone, PDF_MIME_TYPE, MS_EXCEL_MIME_TYPE, IMAGE_MIME_TYPE } from '@mantine/dropzone';
-import { FileUp, FileText, Check, AlertCircle, Loader2, Download, Info } from 'lucide-react';
+import { FileUp, FileText, Check, AlertCircle, Loader2, Download, Info, Trash2, Edit3, Image as ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useMapping } from '../context/MappingContext';
 import * as XLSX from 'xlsx';
+import ImageEditor from '../components/ImageEditor';
 
 const CSV_MIME_TYPES = ['text/csv', 'application/vnd.ms-excel', 'text/comma-separated-values', 'application/csv'];
 
-const PREDEFINED_TEMPLATES = [
-    { label: 'ProfitSquare / NurserySeva', value: 'profitsquare_products' },
-    { label: 'Empulse - Hotel', value: 'empulse_hotel' },
-    { label: 'Empulse - Employee (Full-time)', value: 'empulse_employee_fulltime' },
-    { label: 'Empulse - Employee (Contract-based)', value: 'empulse_employee_contract' },
-];
+import { PREDEFINED_TEMPLATES, TEMPLATE_HEADERS_MAP } from '../config/templates';
 
 const Upload = () => {
-    const [document, setDocument] = useState(null);
+    const [documents, setDocuments] = useState([]);
     const [template, setTemplate] = useState(null);
     const [templateSource, setTemplateSource] = useState('predefined');
     const [selectedTemplateId, setSelectedTemplateId] = useState('profitsquare_products');
     
+    // Image Editor State
+    const [editingImage, setEditingImage] = useState(null);
+    const [editingIndex, setEditingIndex] = useState(-1);
+
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState(0);
     const [status, setStatus] = useState('');
@@ -38,30 +38,7 @@ const Upload = () => {
     }, [selectedTemplateId, templateSource, template]);
 
     const handleDownloadSample = () => {
-        const headersMap = {
-            'profitsquare_products': {
-                headers: ['Product Name', 'Variety', 'Barcode', 'Expiry', 'Brand', 'Category', 'Sub Category', 'HSN', 'GST', 'Buying Price', 'Selling Price', 'MRP', 'Qty'],
-                data: ['Sample Product', '1 Litre', '123456789', '2025-12-31', 'BrandX', 'CategoryY', 'SubZ', '1234', '18%', '100', '150', '200', '10'],
-                format: 'csv'
-            },
-            'empulse_hotel': {
-                headers: ['First Name *', 'Middle Name', 'Surname *', 'Mobile *', 'Gender *', 'Employee ID *', 'Date of Joining *', 'Date of Birth *', 'Personal Email ID', 'Aadhaar Number *', 'PAN Card Number', 'Voter Card ID Number', 'Marital Status', 'Working Hours *', 'Payment Type *', 'Salary Amount *', 'Salary Type', 'Holiday Rate', 'Login Allowed', 'Password', 'Attendance Type', 'Tolerance', 'Double Check In', 'Multiple Check In/Out', 'No of In/Out', 'Referral Name', 'Referral Mobile Number', 'Branch Name *', 'Department Name', 'Shift Name', 'Designation Name', 'Work Module Name', 'Room Name', 'PF Enabled', 'PF Number', 'PF Auto Calculate Wage', 'PF Calc on Calendar Days', 'PF Wage Limit', 'PF Employee %', 'PF Employer %', 'ESI Enabled', 'ESI Number', 'ESI Auto Calculate Wage', 'ESI Wage Limit', 'ESI Employee %', 'ESI Employer %', 'PT Enabled', 'PT 11 Months', 'PT Feb', 'Bank Name', 'Account Number', 'IFSC Code', 'Employee Name as per Bank', 'Account Type', 'Relative Name', 'Relative Relation', 'Relative Mobile', 'Reference Name', 'Reference Relation', 'Reference Mobile', 'Last Company Name', 'Previous Experience', 'Joining Salary', 'Travelling Allowance', 'Reporting Manager', 'Worked in FML', 'FML Outlet Name', 'FML Old Designation', 'FML Working Date', 'Father Mobile Number', 'Current Address', 'Home Town Address', 'Interviewed By', 'Uniform - T-Shirt Size', 'Uniform - Pant Size', 'Uniform - Apron', 'Uniform - Cap/Bandana', 'Is Not Indian Citizen', 'Country Name', 'Document Type Name', 'Document Number', 'Last Working Day'],
-                data: ['John', 'A.', 'Doe', '9876543210', 'Male', 'H001', '2024-01-01', '1990-01-01', 'john@example.com', '123456789012', 'ABCDE1234F', 'VOTER123', 'Married', '8', 'Monthly', '25000', 'Fixed', '500', 'Yes', 'P@ss123', 'Biometric', '15', 'No', 'Yes', '2', 'Referrer X', '9998887776', 'Main Branch', 'F&B', 'Morning', 'Waiter', 'Module A', 'Room 101', 'Yes', 'PF12345', 'Yes', 'Yes', '15000', '12', '13', 'Yes', 'ESI123', 'Yes', '21000', '0.75', '3.25', 'Yes', 'Yes', 'Yes', 'Sample Bank', '1234567890', 'SBIN0001234', 'John Doe', 'Savings', 'Jane Doe', 'Wife', '9876543211', 'Ref Person', 'Friend', '9888777666', 'Old Corp', '2 Years', '20000', '100', 'Manager Y', 'No', 'N/A', 'N/A', 'N/A', '9876543212', 'Line 1, City', 'Hometown, State', 'Interviewer Z', 'L', '34', 'Yes', 'Yes', 'No', 'India', 'Passport', 'P1234567', 'N/A'],
-                format: 'xlsx'
-            },
-            'empulse_employee_fulltime': {
-                headers: ['Name *', 'Mobile *', 'Gender *', 'Employee ID *', 'Date of Joining *', 'Working Hours *', 'Payment Type *', 'Salary Amount *', 'Login Allowed', 'Password', 'Attendance Type', 'Tolerance', 'Double Check In', 'Multiple Check In/Out', 'No of In/Out', 'Date of Birth', 'Email', 'Aadhaar Number', 'Referral Name', 'Referral Mobile Number', 'Branch Name', 'Department Name', 'Shift Name', 'Designation Name', 'Salary Type', 'Is Hourly Paid', 'Overtime Type', 'Wage Overtime', 'Holiday Rate', 'PF Enabled', 'PF Auto Calculate Wage', 'PF Calc on Calendar Days', 'PF Number', 'PF Wage Limit', 'PF Employee %', 'PF Employer %', 'ESI Enabled', 'ESI Auto Calculate Wage', 'ESI Number', 'ESI Wage Limit', 'ESI Employee %', 'ESI Employer %', 'PT Enabled', 'PT 11 Months', 'PT Feb', 'Bank Name', 'Account Number', 'IFSC Code'],
-                data: ['Jane Doe', '9123456789', 'Female', 'F101', '2024-02-01', '9', 'Monthly', '30000', 'Yes', 'Secure123', 'Manual', '30', 'No', 'Yes', '4', '1995-05-15', 'jane@example.com', '987654321098', 'Referrer B', '9888777665', 'Corporate', 'HR', 'General', 'Manager', 'Monthly', 'No', 'Fixed', '200', '1000', 'Yes', 'Yes', 'No', 'PF5566', '15000', '12', '13', 'Yes', 'Yes', 'ESI7788', '21000', '0.75', '3.25', 'Yes', 'No', 'Yes', 'Global Bank', '987654321', 'GIBL001'],
-                format: 'xlsx'
-            },
-            'empulse_employee_contract': {
-                headers: ['Name *', 'Mobile *', 'Gender *', 'Employee ID *', 'Date of Joining *', 'Working Hours *', 'Contract Type *', 'Daily Salary *', 'Date of Birth', 'Aadhaar Number', 'Referral Name', 'Referral Mobile Number', 'Branch Name', 'Department Name', 'Shift Name', 'Designation Name', 'Bank Name', 'Account Number', 'IFSC Code', 'Employee Name as per Bank', 'Account Type'],
-                data: ['Sam Smith', '9988776655', 'Male', 'C501', '2024-03-01', '10', 'Daily', '800', '1988-10-10', '556677889900', 'Referrer C', '9111222333', 'Warehouse', 'Logistics', 'Night', 'Picker', 'Local Bank', '554433221', 'LOCL002', 'Sam Smith', 'Current'],
-                format: 'xlsx'
-            }
-        };
-
-        const config = headersMap[selectedTemplateId];
+        const config = TEMPLATE_HEADERS_MAP[selectedTemplateId];
         if (!config) return;
 
         if (config.format === 'xlsx') {
@@ -82,16 +59,18 @@ const Upload = () => {
     };
 
     const handleProcess = async () => {
-        if (!document) return;
+        if (documents.length === 0) return;
         if (templateSource === 'custom' && !template) return;
 
         setIsProcessing(true);
-        setStatus('Uploading documents to TiPiC Engine...');
+        setStatus(`Uploading ${documents.length} document(s)...`);
         setProgress(10);
         
         try {
             const formData = new FormData();
-            formData.append('document', document);
+            documents.forEach(doc => {
+                formData.append('document', doc);
+            });
             
             if (templateSource === 'predefined') {
                 formData.append('template_id', selectedTemplateId);
@@ -99,11 +78,12 @@ const Upload = () => {
                 formData.append('template', template);
             }
 
-            setStatus('Extracting data & performing OCR...');
+            setStatus('Extracting data from multi-file batch...');
             setProgress(40);
 
             const response = await axios.post('/api/v1/extract', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 300000 // 5 minutes for large batches
             });
 
             if (response.data.success) {
@@ -124,29 +104,51 @@ const Upload = () => {
             }
         } catch (err) {
             console.error(err);
-            setStatus('Error: Failed to process document. Please try again.');
+            setStatus('Error: Failed to process documents. Please try again.');
             setIsProcessing(false);
             setProgress(0);
         }
     };
 
+    const handleEditImage = (index) => {
+        const doc = documents[index];
+        if (!doc.type.startsWith('image/')) return;
+        
+        setEditingIndex(index);
+        setEditingImage(URL.createObjectURL(doc));
+    };
+
+    const handleSaveEditedImage = (blob) => {
+        const newFile = new File([blob], documents[editingIndex].name, { type: 'image/jpeg' });
+        const newDocs = [...documents];
+        newDocs[editingIndex] = newFile;
+        setDocuments(newDocs);
+        setEditingImage(null);
+        setEditingIndex(-1);
+    };
+
+    const handleRemoveDoc = (index) => {
+        const newDocs = documents.filter((_, i) => i !== index);
+        setDocuments(newDocs);
+    };
+
     return (
         <Stack gap="xl">
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                <Title order={2} mb="xs">Process New Document</Title>
-                <Text c="dimmed">Upload your source file and select a target template to begin automated mapping.</Text>
+                <Title order={2} mb="xs">Process New Documents</Title>
+                <Text c="dimmed">Upload one or multiple files. Use the edit tool to crop or rotate images for better extraction.</Text>
             </motion.div>
 
             <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
                 <Stack>
-                    <Title order={4}>1. Customer Document</Title>
+                    <Title order={4}>1. Source Documents</Title>
                     <Dropzone
-                        onDrop={(files) => setDocument(files[0])}
-                        maxSize={10 * 1024 ** 2}
+                        onDrop={(files) => setDocuments([...documents, ...files])}
+                        maxSize={20 * 1024 ** 2}
                         accept={[...PDF_MIME_TYPE, ...MS_EXCEL_MIME_TYPE, ...IMAGE_MIME_TYPE, ...CSV_MIME_TYPES]}
                         loading={isProcessing}
                     >
-                        <Group justify="center" gap="xl" mih={240} style={{ pointerEvents: 'none' }}>
+                        <Group justify="center" gap="xl" mih={200} style={{ pointerEvents: 'none' }}>
                             <Dropzone.Accept>
                                 <FileUp size={52} color="var(--mantine-color-blue-6)" />
                             </Dropzone.Accept>
@@ -158,21 +160,41 @@ const Upload = () => {
                             </Dropzone.Idle>
 
                             <div>
-                                <Text size="xl" inline>Drag document here or click to select</Text>
+                                <Text size="xl" inline>Drag files here or click to select</Text>
                                 <Text size="sm" c="dimmed" inline mt={7}>
-                                    Supports PDF, Excel, CSV and Image formats (max 10MB)
+                                    Supports PDF, Excel, CSV and Images (Max 20MB total)
                                 </Text>
                             </div>
                         </Group>
                     </Dropzone>
-                    {document && (
-                        <Paper withBorder p="xs" radius="md">
-                            <Group gap="sm">
-                                <ThemeIcon color="teal" variant="light"><Check size={16} /></ThemeIcon>
-                                <Text size="sm" truncate>{document.name}</Text>
-                            </Group>
-                        </Paper>
-                    )}
+                    
+                    <Stack gap="xs">
+                        {documents.map((doc, index) => (
+                            <Paper key={index} withBorder p="xs" radius="md">
+                                <Group justify="space-between" wrap="nowrap">
+                                    <Group gap="sm" wrap="nowrap" style={{ flex: 1 }}>
+                                        {doc.type.startsWith('image/') ? <ImageIcon size={18} /> : <FileText size={18} />}
+                                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                                            <Text size="sm" truncate>{doc.name}</Text>
+                                            <Text size="xs" c="dimmed">{(doc.size / 1024).toFixed(1)} KB</Text>
+                                        </div>
+                                    </Group>
+                                    <Group gap={4}>
+                                        {doc.type.startsWith('image/') && (
+                                            <Tooltip label="Crop or Rotate">
+                                                <ActionIcon variant="subtle" color="indigo" onClick={() => handleEditImage(index)}>
+                                                    <Edit3 size={16} />
+                                                </ActionIcon>
+                                            </Tooltip>
+                                        )}
+                                        <ActionIcon variant="subtle" color="red" onClick={() => handleRemoveDoc(index)}>
+                                            <Trash2 size={16} />
+                                        </ActionIcon>
+                                    </Group>
+                                </Group>
+                            </Paper>
+                        ))}
+                    </Stack>
                 </Stack>
 
                 <Stack>
@@ -189,7 +211,7 @@ const Upload = () => {
                         />
                     </Group>
 
-                    <Paper withBorder p="md" radius="md" mih={240}>
+                    <Paper withBorder p="md" radius="md" mih={200}>
                         {templateSource === 'predefined' ? (
                             <Stack justify="center" align="stretch" h="100%">
                                 <Select
@@ -248,11 +270,11 @@ const Upload = () => {
             </SimpleGrid>
 
             <AnimatePresence>
-                {document && (templateSource === 'predefined' || template) && !isProcessing && progress === 0 && (
+                {documents.length > 0 && (templateSource === 'predefined' || template) && !isProcessing && progress === 0 && (
                     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
                         <Center mt="xl">
                             <Button size="xl" color="indigo" leftSection={<Loader2 size={20} />} onClick={handleProcess}>
-                                Start Processing
+                                Start Batch Extraction ({documents.length} files)
                             </Button>
                         </Center>
                     </motion.div>
@@ -283,6 +305,13 @@ const Upload = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            <ImageEditor 
+                opened={!!editingImage} 
+                onClose={() => setEditingImage(null)} 
+                image={editingImage} 
+                onSave={handleSaveEditedImage}
+            />
         </Stack>
     );
 };

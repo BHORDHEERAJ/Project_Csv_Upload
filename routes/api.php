@@ -42,6 +42,7 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     Route::get('/user/notifications', [UserController::class, 'getNotifications']);
     Route::get('/jobs/{uuid}', [AiProxyController::class, 'getJob']);
     Route::post('/jobs/{id}/save', [AiProxyController::class, 'saveJob']);
+    Route::get('/files/{id}', [AiProxyController::class, 'serveFile'])->name('api.files.show');
 
     // Configuration Management
     Route::apiResource('mappings', MappingController::class);

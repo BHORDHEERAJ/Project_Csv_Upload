@@ -106,7 +106,15 @@ const History = () => {
                                     <Table.Tr key={log.id}>
                                         <Table.Td>
                                             <Text size="sm" fw={500}>
-                                                {new Date(log.created_at).toLocaleString()}
+                                                {new Date(log.created_at).toLocaleString('en-IN', { 
+                                                    timeZone: 'Asia/Kolkata', 
+                                                    day: '2-digit', 
+                                                    month: '2-digit', 
+                                                    year: 'numeric', 
+                                                    hour: '2-digit', 
+                                                    minute: '2-digit', 
+                                                    hour12: true 
+                                                })}
                                             </Text>
                                         </Table.Td>
                                         <Table.Td>

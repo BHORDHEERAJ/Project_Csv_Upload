@@ -1,57 +1,40 @@
-const vision = require('@google-cloud/vision');
 const fs = require('fs');
 const sharp = require('sharp');
-const config = require('../config/google');
+const aiService = require('../services/aiService');
 
 const parse = async (filePath) => {
-    // 1. Preprocess image with sharp for better OCR accuracy
+    // 1. Preprocess image with sharp for better OCR accuracy (Focus on contrast)
     const processedImagePath = filePath.replace(/(\.[\w\d]+)$/i, '_processed$1');
-    await sharp(filePath)
-        .grayscale()
-        .normalize()
-        .sharpen()
-        .toFile(processedImagePath);
-
-    // 2. Initialize Vision Client
-    let clientOptions = {};
-    if (config.google.serviceAccountPath) {
-        clientOptions.keyFilename = config.google.serviceAccountPath;
-    } else if (config.google.visionApiKey) {
-        // Fallback to API Key if no service account
-        // Note: The official client ideally prefers ADC or Keyfile, 
-        // but for some setups we use the Vision Key specifically.
-        clientOptions.apiKey = config.google.visionApiKey;
+    try {
+        await sharp(filePath)
+            .grayscale()
+            .normalize() // Enhances contrast by stretching the luminance range
+            .sharpen()   // Makes handwriting edges clearer
+            .toFile(processedImagePath);
+    } catch (sharpError) {
+        console.warn('[ImageParser] Sharp preprocessing failed, using original image:', sharpError.message);
+        // Fallback to original if sharp fails
+        fs.copyFileSync(filePath, processedImagePath);
     }
 
-    const client = new vision.ImageAnnotatorClient(clientOptions);
-
     try {
-        // 3. Perform OCR using Cloud Vision
-        const [result] = await client.textDetection(processedImagePath);
-        const detections = result.textAnnotations;
-        const fullText = detections.length > 0 ? detections[0].description : '';
-
-        // 4. Use Gemini to structure the raw OCR text into JSON
-        // This is the "Best Practice" hybrid approach: Vision for OCR, Gemini for Structuring
-        const aiService = require('../services/aiService');
-        const prompt = `Convert the following raw OCR text from a document into a structured JSON object. 
-        Ensure Marathi text is correctly handled.
-        Return ONLY a JSON object with:
-        - "headers": array of column names
-        - "rows": array of objects mapping headers to values.`;
-
-        const structuredData = await aiService.processData(prompt, { rawText: fullText });
+        // 2. Use the Universal Agent (Gemini 1.5 Pro) to extract data directly from image
+        console.log(`[ImageParser] Starting Universal Agent extraction for: ${filePath}`);
+        const result = await aiService.extractTableFromImage(processedImagePath);
         
         // Cleanup processed file
         try { fs.unlinkSync(processedImagePath); } catch (e) {}
 
         return {
-            headers: structuredData.headers || [],
-            rows: structuredData.rows || []
+            headers: result.table_metadata?.columns_detected || Object.keys(result.rows[0] || {}),
+            rows: result.rows || [],
+            metadata: result.table_metadata || {}
         };
     } catch (e) {
-        console.error('Vision OCR or Structuring failed:', e.message);
-        throw new Error(`AI OCR Engine Failed: ${e.message}`);
+        console.error('[ImageParser] Universal Agent extraction failed:', e.message);
+        // Cleanup on failure
+        try { fs.unlinkSync(processedImagePath); } catch (cleanupError) {}
+        throw new Error(`Universal AI Agent Failed: ${e.message}`);
     }
 };
 

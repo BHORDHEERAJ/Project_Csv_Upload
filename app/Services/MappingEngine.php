@@ -11,7 +11,7 @@ class MappingEngine
         $this->aiService = $aiService;
     }
 
-    public function autoMap(array $sourceHeaders, array $templateHeaders)
+    public function autoMap(array $sourceHeaders, array $templateHeaders, array $sampleRows = [])
     {
         $mapping = [];
         $unmappedTemplate = [];
@@ -27,13 +27,18 @@ class MappingEngine
             }
         }
 
-        // If many fields unmapped, use AI to assist
-        if (count($unmappedTemplate) > 0 && count($unmappedTemplate) > count($templateHeaders) / 2) {
+        // Use AI for any unmapped fields, using content as context
+        if (count($unmappedTemplate) > 0) {
              try {
-                 $aiSuggestions = $this->aiService->suggestMapping($sourceHeaders, $templateHeaders);
-                 return array_merge($mapping, $aiSuggestions);
+                 $aiSuggestions = $this->aiService->suggestMappingWithContext($sourceHeaders, $templateHeaders, $sampleRows);
+                 // Only fill in nulls with AI suggestions
+                 foreach ($aiSuggestions as $th => $sh) {
+                     if (isset($mapping[$th]) && $mapping[$th] === null && in_array($sh, $sourceHeaders)) {
+                         $mapping[$th] = $sh;
+                     }
+                 }
              } catch (\Exception $e) {
-                 // Fallback to whatever fuzzy matches we found
+                 \Log::warning("AI Mapping failed: " . $e->getMessage());
              }
         }
 
@@ -54,22 +59,16 @@ class MappingEngine
                 return $option;
             }
 
-            // 2. Levenshtein Similarity
-            $lev = levenshtein($target, $optClean);
-            $sim = 1 - ($lev / max(strlen($target), strlen($optClean), 1));
-            if ($sim > 0.8 && $sim > $maxScore) {
-                $maxScore = $sim;
-                $bestMatch = $option;
-            }
-
-            // 3. Keyword match (Marathi + English common terms)
+            // 2. Keyword match (Marathi + English common terms)
             $keywords = [
-                'name' => ['नाव', 'full name', 'employee', 'customer'],
-                'mobile' => ['मोबाईल', 'phone', 'contact', 'cell'],
-                'address' => ['पत्ता', 'location', 'city'],
-                'date' => ['तारीख', 'dob', 'joining'],
-                'id' => ['कोड', 'code', 'no', 'number'],
-                'amount' => ['रक्कम', 'price', 'total', 'salary']
+                'name' => ['नाव', 'full name', 'employee', 'customer', 'item', 'product'],
+                'mobile' => ['मोबाईल', 'phone', 'contact', 'cell', 'number'],
+                'address' => ['पत्ता', 'location', 'city', 'village', 'गाव'],
+                'date' => ['तारीख', 'dob', 'joining', 'दिनांक'],
+                'id' => ['कोड', 'code', 'no', 'number', 'sr', 'अनुक्रमांक'],
+                'price' => ['रक्कम', 'price', 'total', 'salary', 'mrp', 'selling', 'buying', 'किंमत', 'दर'],
+                'quantity' => ['quant', 'qty', 'count', 'नग', 'प्रमाण', 'संख्या'],
+                'discount' => ['सवलत', 'off', 'disc']
             ];
 
             foreach ($keywords as $key => $syns) {
@@ -79,10 +78,19 @@ class MappingEngine
                     }
                 }
             }
+
+            // 3. Levenshtein Similarity
+            $lev = levenshtein($target, $optClean);
+            $sim = 1 - ($lev / max(strlen($target), strlen($optClean), 1));
+            if ($sim > 0.8 && $sim > $maxScore) {
+                $maxScore = $sim;
+                $bestMatch = $option;
+            }
         }
 
         return $bestMatch;
     }
+
 
     public function normalizeValue($value, $type = 'text')
     {

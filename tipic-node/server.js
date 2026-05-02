@@ -54,7 +54,7 @@ const upload = multer({
 
 // Main Extraction Endpoint
 app.post('/api/v1/extract', upload.fields([
-    { name: 'document', maxCount: 1 },
+    { name: 'document', maxCount: 10 }, // Increased to allow multiple images
     { name: 'template', maxCount: 1 }
 ]), async (req, res) => {
     const sessionId = uuidv4();
@@ -65,15 +65,28 @@ app.post('/api/v1/extract', upload.fields([
             return res.status(400).json({ error: 'Source document is required' });
         }
 
-        const documentFile = req.files['document'][0];
+        const documentFiles = req.files['document'];
         const templateFile = req.files['template'] ? req.files['template'][0] : null;
 
-        logger.info(`Processing document: ${documentFile.originalname}`);
+        logger.info(`Processing ${documentFiles.length} documents...`);
 
-        // 1. Extract Data from Source Document
-        logger.info(`Starting parser for: ${documentFile.originalname}`);
-        const extractionResult = await universalParser.parse(documentFile.path, documentFile.originalname);
-        logger.info(`Parser finished with ${extractionResult.rows.length} rows`);
+        let combinedRows = [];
+        let combinedHeaders = new Set();
+        let firstMetadata = null;
+
+        for (const documentFile of documentFiles) {
+            logger.info(`Starting parser for: ${documentFile.originalname}`);
+            const extractionResult = await universalParser.parse(documentFile.path, documentFile.originalname);
+            logger.info(`Parser finished with ${extractionResult.rows.length} rows for ${documentFile.originalname}`);
+            
+            combinedRows = combinedRows.concat(extractionResult.rows);
+            if (extractionResult.headers) {
+                extractionResult.headers.forEach(h => combinedHeaders.add(h));
+            }
+            if (!firstMetadata && extractionResult.metadata) {
+                firstMetadata = extractionResult.metadata;
+            }
+        }
 
         // 2. Extract Headers from Template (if provided)
         let templateHeaders = [];
@@ -82,15 +95,16 @@ app.post('/api/v1/extract', upload.fields([
             templateHeaders = templateResult.headers;
         }
 
-        logger.info(`Extraction complete for session: ${sessionId}`);
+        logger.info(`Extraction complete for session: ${sessionId}. Total rows: ${combinedRows.length}`);
 
         res.json({
             success: true,
             sessionId,
-            headers: extractionResult.headers,
-            rows: extractionResult.rows,
+            headers: Array.from(combinedHeaders),
+            rows: combinedRows,
             templateHeaders: templateHeaders,
-            message: 'Magic extraction successful'
+            metadata: firstMetadata,
+            message: `Magic extraction successful for ${documentFiles.length} files`
         });
 
     } catch (error) {
